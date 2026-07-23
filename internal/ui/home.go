@@ -6,6 +6,7 @@ import (
 
 	"gioui.org/layout"
 	"gioui.org/op/paint"
+	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
@@ -41,20 +42,22 @@ func (h *Home) Layout(gtx layout.Context, th *material.Theme, now time.Time) lay
 						})
 					}),
 					layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-						return h.layoutDigital(gtx, th, now)
+						return layout.Inset{Right: unit.Dp(40)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return h.layoutDigital(gtx, th, now)
+						})
 					}),
 				)
 			}),
 			// Bottom: the two big action buttons.
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return bigButton(gtx, th, &h.Radio, "Radio", Mocha.Blue)
+					return layout.Flex{Axis: layout.Horizontal, Spacing: layout.SpaceSides}.Layout(gtx,
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return actionButton(gtx, th, &h.Radio, "Radio", Mocha.Blue)
 						}),
-						layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return bigButton(gtx, th, &h.Spotify, "Spotify", Mocha.Green)
+						layout.Rigid(layout.Spacer{Width: unit.Dp(20)}.Layout),
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return actionButton(gtx, th, &h.Spotify, "Spotify", Mocha.Green)
 						}),
 					)
 				})
@@ -69,29 +72,33 @@ func (h *Home) layoutDigital(gtx layout.Context, th *material.Theme, now time.Ti
 			l := material.Label(th, unit.Sp(180), clock.Time(now))
 			l.Color = Mocha.Text
 			l.Font.Weight = 600
+			l.Alignment = text.End
 			return l.Layout(gtx)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			l := material.Label(th, unit.Sp(40), clock.Weekday(now))
+			l := material.Label(th, unit.Sp(52), clock.Weekday(now))
 			l.Color = Mocha.Mauve
+			l.Alignment = text.End
 			return l.Layout(gtx)
 		}),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			l := material.Label(th, unit.Sp(40), clock.Date(now))
+			l := material.Label(th, unit.Sp(52), clock.Date(now))
 			l.Color = Mocha.Subtext0
+			l.Alignment = text.End
 			return l.Layout(gtx)
 		}),
 	)
 }
 
-// bigButton renders a large, touch-friendly rounded button in the given accent
-// colour with a dark label.
-func bigButton(gtx layout.Context, th *material.Theme, click *widget.Clickable, label string, accent color.NRGBA) layout.Dimensions {
+// actionButton renders a touch-friendly rounded button with a solid accent
+// fill and a dark label — sized between the original large buttons and the
+// compact variant.
+func actionButton(gtx layout.Context, th *material.Theme, click *widget.Clickable, label string, accent color.NRGBA) layout.Dimensions {
 	b := material.Button(th, click, label)
 	b.Background = accent
 	b.Color = Mocha.Crust
-	b.TextSize = unit.Sp(40)
-	b.CornerRadius = unit.Dp(20)
-	b.Inset = layout.UniformInset(unit.Dp(28))
+	b.TextSize = unit.Sp(30)
+	b.CornerRadius = unit.Dp(16)
+	b.Inset = layout.Inset{Top: unit.Dp(18), Bottom: unit.Dp(18), Left: unit.Dp(36), Right: unit.Dp(36)}
 	return b.Layout(gtx)
 }
