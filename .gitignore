@@ -1,0 +1,10 @@
+# Build output
+/alarmclock
+/dist/
+
+# Local runtime config / secrets (never commit tokens)
+config.json
+*.local.json
+
+# OS / editor
+.DS_Store
