@@ -11,6 +11,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/unit"
 
+	"alarmclock/internal/config"
 	"alarmclock/internal/ui"
 )
 
@@ -35,10 +36,13 @@ func main() {
 }
 
 func run(w *app.Window) error {
-	th := ui.NewTheme()
-	home := &ui.Home{}
+	store, err := config.Load()
+	if err != nil {
+		log.Printf("loading config: %v (using defaults)", err)
+	}
+	application := ui.NewApp(ui.NewTheme(), store, ui.LogRinger{})
 
-	// Redraw once a second so the clock stays current.
+	// Redraw once a second so the clock stays current and alarms are evaluated.
 	go func() {
 		for range time.Tick(time.Second) {
 			w.Invalidate()
@@ -52,7 +56,7 @@ func run(w *app.Window) error {
 			return e.Err
 		case app.FrameEvent:
 			gtx := app.NewContext(&ops, e)
-			home.Layout(gtx, th, time.Now())
+			application.Layout(gtx, time.Now())
 			e.Frame(gtx.Ops)
 		}
 	}
