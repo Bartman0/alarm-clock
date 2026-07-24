@@ -1,13 +1,18 @@
 BINARY := alarmclock
 
+# Gio's Vulkan backend crashes on the Pi's V3DV driver; force the OpenGL ES
+# backend by dropping Vulkan at build time. (No effect on macOS, which uses
+# Metal.)
+TAGS := novulkan
+
 .PHONY: build run test vet install
 
 build:
-	go build -o $(BINARY) ./cmd/alarmclock
+	go build -tags $(TAGS) -o $(BINARY) ./cmd/alarmclock
 
 # Run windowed on a desktop for development.
 run:
-	ALARMCLOCK_WINDOWED=1 go run ./cmd/alarmclock
+	ALARMCLOCK_WINDOWED=1 go run -tags $(TAGS) ./cmd/alarmclock
 
 test:
 	go test ./...

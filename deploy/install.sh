@@ -26,9 +26,10 @@ if [ "${SKIP_APT:-0}" != "1" ] && command -v apt-get >/dev/null 2>&1; then
 		sway mpv libasound2-dev
 fi
 
-# 2. Build.
+# 2. Build. The novulkan tag drops Gio's Vulkan backend, which crashes on the
+#    Pi's V3DV driver; Gio then uses OpenGL ES.
 echo "==> Building alarmclock…"
-go build -o alarmclock ./cmd/alarmclock
+go build -tags novulkan -o alarmclock ./cmd/alarmclock
 
 # 3. Install the binary and the sway kiosk config.
 echo "==> Installing binary and sway config…"
