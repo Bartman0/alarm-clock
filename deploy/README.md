@@ -105,6 +105,13 @@ the app fullscreen. To update: `git pull && ./deploy/install.sh && sudo reboot`.
 - **To exit the kiosk / debug**: SSH in and `pkill sway` (the tty1 shell was
   replaced by sway via `exec`, so it won't drop back to a prompt on its own).
   Comment out the kiosk block in `~/.profile` to disable autostart.
+- **`Timeout waiting session to become active` / libseat VT permission errors**:
+  sway is being started without an active seat — you're almost certainly running
+  it **over SSH**. It must run on the physical console (tty1). Reboot and let the
+  autostart launch it there. Check with `loginctl session-status` on tty1
+  (`Seat: seat0`, `Active: yes`). If it fails even on tty1, install the seatd
+  fallback: `sudo apt install -y seatd && sudo systemctl enable --now seatd`, add
+  yourself to `video,render,input,_seatd`, and reboot.
 - **No sound**: verify the output with `mpv <some.mp3>`; set the default sink
   with `wpctl`/`raspi-config`. The alarm tone is generated on first run at
   `~/.cache/alarmclock/alarm.wav`.

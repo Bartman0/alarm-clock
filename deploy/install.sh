@@ -49,6 +49,10 @@ if command -v raspi-config >/dev/null 2>&1; then
 	sudo raspi-config nonint do_boot_behaviour B2
 fi
 
+# 5b. Ensure the user can access DRM/input devices (belt-and-suspenders; logind
+#     also grants this to the active console session).
+sudo usermod -aG video,render,input "$USER" || true
+
 # 6. Autostart sway (and the app) from the tty1 login shell. Launching from a
 #    real login session is what gives sway its seat / DRM master.
 PROFILE="$HOME/.profile"
