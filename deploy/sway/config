@@ -5,7 +5,7 @@
 # compositor — keeps pointer/touch input aligned with the display (rotating via
 # the kernel's video= line does not).
 
-output DSI-2 transform 270
+output DSI-2 transform 90
 
 default_border none
 default_floating_border none

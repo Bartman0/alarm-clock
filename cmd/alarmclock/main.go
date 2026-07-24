@@ -30,7 +30,11 @@ func main() {
 			app.Title("Alarm Clock"),
 			app.Size(unit.Dp(1280), unit.Dp(720)),
 		)
-		if os.Getenv("ALARMCLOCK_WINDOWED") == "" {
+		// Default to a normal window: under the sway kiosk the borderless
+		// tiled window already fills the screen, and Gio's Wayland fullscreen
+		// path fails to size the GL surface in time (wl_egl_window_create with
+		// a 0x0 size). Opt into Gio fullscreen with ALARMCLOCK_FULLSCREEN=1.
+		if os.Getenv("ALARMCLOCK_FULLSCREEN") != "" {
 			w.Option(app.Fullscreen.Option())
 		}
 		if err := run(w); err != nil {

@@ -10,9 +10,10 @@ TAGS := novulkan
 build:
 	go build -tags $(TAGS) -o $(BINARY) ./cmd/alarmclock
 
-# Run windowed on a desktop for development.
+# Run on a desktop for development (a normal window; the kiosk relies on sway
+# to fill the screen). Set ALARMCLOCK_FULLSCREEN=1 for Gio fullscreen.
 run:
-	ALARMCLOCK_WINDOWED=1 go run -tags $(TAGS) ./cmd/alarmclock
+	go run -tags $(TAGS) ./cmd/alarmclock
 
 test:
 	go test ./...
