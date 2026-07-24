@@ -1,9 +1,11 @@
 # Deploying on the Raspberry Pi 5
 
 The app is built **natively on the Pi** (Gio needs cgo on Linux, which makes
-cross-compiling from macOS painful). It runs fullscreen as a systemd service
-under **sway** as a single-application kiosk compositor (which also rotates the
-display) — no desktop required.
+cross-compiling from macOS painful). It runs fullscreen under **sway** as a
+single-application kiosk compositor (which also rotates the display) — no
+desktop required. sway is launched from the **tty1 login shell** via console
+autologin; that login session owns the seat, so sway gets DRM/input access (a
+plain systemd service does not, which is why we don't use one).
 
 ## 1. System dependencies
 
@@ -85,19 +87,24 @@ Spotify requires a **Premium** account.
 
 ```sh
 git clone <repo> alarm-clock && cd alarm-clock
-./deploy/install.sh          # builds, installs the binary + service, enables it
-sudo systemctl start alarmclock
-journalctl -u alarmclock -f  # follow logs
+./deploy/install.sh   # deps, build, install binary + sway config,
+                      # enable console autologin, add kiosk autostart to ~/.profile
+sudo reboot
 ```
 
-The service restarts on crash and starts on boot. To update: `git pull` then
-re-run `./deploy/install.sh` and `sudo systemctl restart alarmclock`.
+On boot the Pi autologins on tty1, and `~/.profile` `exec`s
+`sway -c /etc/alarmclock/sway.config`, which rotates the display and launches
+the app fullscreen. To update: `git pull && ./deploy/install.sh && sudo reboot`.
 
 ## Troubleshooting
 
-- **Black screen / sway won't start**: ensure the service runs on the seat that
-  owns the display (`TTYPath`), and that the user is in the `video`/`render`
-  groups. Check `journalctl -u alarmclock`.
+- **Stops at a text console (app doesn't appear)**: confirm console autologin is
+  on (`sudo raspi-config` → System → Boot → Console Autologin), and that the
+  kiosk block is at the end of `~/.profile`. Run `sway -c /etc/alarmclock/sway.config`
+  by hand on tty1 to see sway's errors.
+- **To exit the kiosk / debug**: SSH in and `pkill sway` (the tty1 shell was
+  replaced by sway via `exec`, so it won't drop back to a prompt on its own).
+  Comment out the kiosk block in `~/.profile` to disable autostart.
 - **No sound**: verify the output with `mpv <some.mp3>`; set the default sink
   with `wpctl`/`raspi-config`. The alarm tone is generated on first run at
   `~/.cache/alarmclock/alarm.wav`.
