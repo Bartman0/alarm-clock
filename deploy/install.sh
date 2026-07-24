@@ -9,6 +9,19 @@ PREFIX=${PREFIX:-/usr/local}
 USER_NAME=${SUDO_USER:-$USER}
 UID_NUM=$(id -u "$USER_NAME")
 
+# System dependencies (Debian/Raspberry Pi OS). Set SKIP_APT=1 to skip.
+# librespot is installed separately (see deploy/README.md); it is optional.
+if [ "${SKIP_APT:-0}" != "1" ] && command -v apt-get >/dev/null 2>&1; then
+	echo "==> Installing system dependencies…"
+	sudo apt-get update
+	sudo apt-get install -y \
+		gcc pkg-config \
+		libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+		libx11-dev libx11-xcb-dev \
+		libegl1-mesa-dev libgles2-mesa-dev libffi-dev libxcursor-dev libvulkan-dev \
+		sway mpv libasound2-dev
+fi
+
 echo "==> Building alarmclock…"
 go build -o alarmclock ./cmd/alarmclock
 

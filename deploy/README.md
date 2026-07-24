@@ -7,17 +7,22 @@ display) — no desktop required.
 
 ## 1. System dependencies
 
-Raspberry Pi OS (Bookworm, 64-bit):
+`./deploy/install.sh` installs everything below automatically via apt (except
+librespot). Run these manually only if you set `SKIP_APT=1` or want them ahead
+of time. Raspberry Pi OS (Bookworm, 64-bit):
 
 ```sh
 # Go toolchain (or install the latest from go.dev)
 sudo apt update
 sudo apt install -y golang
 
-# Gio build dependencies
-sudo apt install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
-  libxkbcommon-x11-dev libgles2-mesa-dev libegl1-mesa-dev libffi-dev \
-  libxcursor-dev libvulkan-dev
+# Gio build dependencies (it compiles both its Wayland and X11 backends, so
+# both sets of headers are needed even though we run under sway).
+sudo apt install -y gcc pkg-config \
+  libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  libx11-dev libx11-xcb-dev \
+  libegl1-mesa-dev libgles2-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
+# If libegl1-mesa-dev / libgles2-mesa-dev are missing, use libegl-dev / libgles-dev.
 
 # Kiosk compositor + audio
 sudo apt install -y sway mpv
