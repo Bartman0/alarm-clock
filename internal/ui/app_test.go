@@ -81,6 +81,29 @@ func TestSnoozeReArmsAfterFiveMinutes(t *testing.T) {
 	}
 }
 
+// Regression: snoozing partway through the firing minute must not be
+// overridden by a second trigger later in that same minute.
+func TestSnoozeNotOverriddenLaterInSameMinute(t *testing.T) {
+	fire := time.Date(2026, 7, 22, 7, 0, 3, 0, time.UTC)
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.now = fire
+	app.tick(fire) // fires at 07:00:03
+
+	snoozeAt := time.Date(2026, 7, 22, 7, 0, 10, 0, time.UTC)
+	app.now = snoozeAt
+	app.snooze()
+
+	// Later in the SAME minute (07:00:40) the alarm must stay silent.
+	later := time.Date(2026, 7, 22, 7, 0, 40, 0, time.UTC)
+	app.now = later
+	app.tick(later)
+
+	if app.cur == screenFiring || r.started != 1 {
+		t.Fatalf("alarm re-fired within the same minute after snooze: cur=%v started=%d", app.cur, r.started)
+	}
+}
+
 func TestDisabledAlarmDoesNotFire(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: false, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})

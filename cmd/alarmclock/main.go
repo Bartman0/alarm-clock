@@ -11,6 +11,7 @@ import (
 	"gioui.org/op"
 	"gioui.org/unit"
 
+	"alarmclock/internal/audio"
 	"alarmclock/internal/config"
 	"alarmclock/internal/ui"
 )
@@ -40,7 +41,9 @@ func run(w *app.Window) error {
 	if err != nil {
 		log.Printf("loading config: %v (using defaults)", err)
 	}
-	application := ui.NewApp(ui.NewTheme(), store, ui.LogRinger{})
+	ringer := audio.NewRinger()
+	defer ringer.Close()
+	application := ui.NewApp(ui.NewTheme(), store, ringer)
 
 	// Redraw once a second so the clock stays current and alarms are evaluated.
 	go func() {

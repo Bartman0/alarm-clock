@@ -23,9 +23,8 @@ const (
 )
 
 const (
-	snoozeDuration = 5 * time.Minute
+	snoozeDuration  = 5 * time.Minute
 	maxRingDuration = 15 * time.Minute
-	minuteGuard     = 30 * time.Second // avoid re-firing within the same minute
 )
 
 // App owns all screen state and drives navigation, alarm timing and layout.
@@ -133,12 +132,20 @@ func (a *App) tick(now time.Time) {
 		if !al.Enabled || !al.Rhythm.Active(now.Weekday()) {
 			continue
 		}
-		if al.Hour == now.Hour() && al.Minute == now.Minute() && now.Sub(a.lastFired[i]) > minuteGuard {
+		// Fire at most once per clock-minute: skip if we already fired during
+		// the current minute (guards against snooze being overridden by a
+		// second same-minute trigger).
+		if al.Hour == now.Hour() && al.Minute == now.Minute() && !sameMinute(a.lastFired[i], now) {
 			a.lastFired[i] = now
 			a.startRinging(i, now)
 			return
 		}
 	}
+}
+
+// sameMinute reports whether two times fall in the same minute-of-day.
+func sameMinute(a, b time.Time) bool {
+	return a.Truncate(time.Minute).Equal(b.Truncate(time.Minute))
 }
 
 func (a *App) startRinging(i int, now time.Time) {

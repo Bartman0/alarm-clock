@@ -41,8 +41,8 @@ Milestone-based build:
 
 1. ✅ Skeleton + Catppuccin Mocha theme + fullscreen window
 2. ✅ Clock home screen (analog + digital + Dutch date, ticking) + action buttons
-3. ⬜ Three alarms + scheduler + firing/snooze screen
-4. ⬜ Audio controller + mpv
+3. ✅ Three alarms + scheduler + firing/snooze screen
+4. ✅ Audio controller + mpv (generated alarm tone, fade-in)
 5. ⬜ Internet radio (radio-browser.info)
 6. ⬜ Spotify (OAuth + librespot + search/library)
 7. ⬜ Kiosk deploy + polish
