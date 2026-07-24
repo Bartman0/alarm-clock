@@ -8,13 +8,21 @@ import (
 	"path/filepath"
 
 	"alarmclock/internal/alarm"
+	"alarmclock/internal/spotify"
 )
 
 // Store holds all persisted state and knows where to write it.
 type Store struct {
-	Alarms [3]alarm.Alarm `json:"alarms"`
+	Alarms  [3]alarm.Alarm  `json:"alarms"`
+	Spotify SpotifySettings `json:"spotify"`
 
 	path string
+}
+
+// SpotifySettings holds the Spotify client ID and OAuth tokens.
+type SpotifySettings struct {
+	ClientID string         `json:"client_id"`
+	Tokens   spotify.Tokens `json:"tokens"`
 }
 
 // defaultPath returns ~/.config/alarmclock/config.json (or the platform

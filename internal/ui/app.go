@@ -13,11 +13,15 @@ import (
 	"alarmclock/internal/clock"
 	"alarmclock/internal/config"
 	"alarmclock/internal/radio"
+	"alarmclock/internal/spotify"
 )
 
-// maxRadioResults bounds how many stations we fetch/display, and sizes the
-// pre-allocated per-row clickables.
-const maxRadioResults = 60
+// maxRadioResults / maxSpotItems bound how many rows we fetch/display and size
+// the pre-allocated per-row clickables.
+const (
+	maxRadioResults = 60
+	maxSpotItems    = 50
+)
 
 type screen int
 
@@ -27,6 +31,7 @@ const (
 	screenEdit
 	screenFiring
 	screenRadio
+	screenSpotify
 )
 
 const (
@@ -94,6 +99,31 @@ type App struct {
 	radioLoading bool
 	radioErr     string
 	nowPlaying   string
+
+	// Spotify screen.
+	spot            *spotify.Client
+	spotDevice      string
+	spotBack        widget.Clickable
+	spotConnect     widget.Clickable
+	spotPause       widget.Clickable
+	spotTabSearch   widget.Clickable
+	spotTabLibrary  widget.Clickable
+	spotSearchBtn   widget.Clickable
+	spotQuery       widget.Editor
+	spotList        widget.List
+	spotRows        []widget.Clickable
+	spotTab         int  // 0 = search artists, 1 = library playlists
+	spotPick        bool // selecting a playlist for an alarm instead of playing
+	spotMu          sync.Mutex
+	spotArtists     []spotify.Artist
+	spotPlaylists   []spotify.Playlist
+	spotLoading     bool
+	spotAuthorizing bool
+	spotErr         string
+	spotStatus      string
+
+	// Editor: pick-a-Spotify-playlist button.
+	editPick widget.Clickable
 }
 
 type alarmRow struct {
@@ -111,10 +141,14 @@ func NewApp(th *material.Theme, store *config.Store, ringer Ringer) *App {
 		editIdx:    -1,
 		ringingIdx: -1,
 		radioRows:  make([]widget.Clickable, maxRadioResults),
+		spotRows:   make([]widget.Clickable, maxSpotItems),
 	}
 	a.radioList.Axis = layout.Vertical
 	a.radioQuery.SingleLine = true
 	a.radioQuery.Submit = true
+	a.spotList.Axis = layout.Vertical
+	a.spotQuery.SingleLine = true
+	a.spotQuery.Submit = true
 	for i := range a.rows {
 		a.rows[i].toggle.Value = store.Alarms[i].Enabled
 	}
@@ -123,6 +157,12 @@ func NewApp(th *material.Theme, store *config.Store, ringer Ringer) *App {
 
 // SetRadio wires the radio player (called by main after construction).
 func (a *App) SetRadio(rp RadioPlayer) { a.radio = rp }
+
+// SetSpotify wires the Spotify client and the Connect device name.
+func (a *App) SetSpotify(c *spotify.Client, deviceName string) {
+	a.spot = c
+	a.spotDevice = deviceName
+}
 
 // SetInvalidate sets the redraw callback used to refresh after async fetches.
 func (a *App) SetInvalidate(fn func()) { a.invalidate = fn }
@@ -142,6 +182,8 @@ func (a *App) Layout(gtx layout.Context, now time.Time) layout.Dimensions {
 		return a.layoutFiring(gtx)
 	case screenRadio:
 		return a.layoutRadio(gtx)
+	case screenSpotify:
+		return a.layoutSpotify(gtx)
 	default:
 		return a.layoutHome(gtx)
 	}

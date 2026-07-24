@@ -32,7 +32,7 @@ func (a *App) layoutEdit(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(a.layoutEditHeader),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 			layout.Rigid(a.layoutTimeRow),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(24)}.Layout),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return a.editSection(gtx, "Ritme", func(gtx layout.Context) layout.Dimensions {
@@ -44,7 +44,7 @@ func (a *App) layoutEdit(gtx layout.Context) layout.Dimensions {
 					})
 				})
 			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(20)}.Layout),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(14)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return a.editSection(gtx, "Geluid", func(gtx layout.Context) layout.Dimensions {
@@ -54,6 +54,12 @@ func (a *App) layoutEdit(gtx layout.Context) layout.Dimensions {
 						)
 					})
 				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if a.draft.Sound.Kind != alarm.SoundSpotify {
+					return layout.Dimensions{}
+				}
+				return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, a.layoutSpotifyChoice)
 			}),
 			// Push Save to the bottom-right corner.
 			layout.Flexed(1, flexSpacer),
@@ -97,6 +103,38 @@ func (a *App) handleEditEvents(gtx layout.Context) {
 			a.draft.Sound.Kind = alarm.SoundKind(k)
 		}
 	}
+	if a.editPick.Clicked(gtx) {
+		a.openSpotifyForPick()
+	}
+}
+
+// layoutSpotifyChoice shows the chosen Spotify playlist for the alarm and a
+// button to pick one; only rendered when the sound kind is Spotify.
+func (a *App) layoutSpotifyChoice(gtx layout.Context) layout.Dimensions {
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				label := a.draft.Sound.Label
+				if label == "" {
+					label = "Geen afspeellijst gekozen"
+				}
+				l := material.Label(a.th, unit.Sp(22), label)
+				l.Color = colorIf(a.draft.Sound.Label != "", Mocha.Green, Mocha.Overlay1)
+				l.MaxLines = 1
+				return l.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Width: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				b := material.Button(a.th, &a.editPick, "Kies afspeellijst")
+				b.Background = Mocha.Surface1
+				b.Color = Mocha.Text
+				b.TextSize = unit.Sp(20)
+				b.CornerRadius = unit.Dp(10)
+				b.Inset = layout.Inset{Top: unit.Dp(12), Bottom: unit.Dp(12), Left: unit.Dp(18), Right: unit.Dp(18)}
+				return b.Layout(gtx)
+			}),
+		)
+	})
 }
 
 // layoutEditHeader shows the back button, the alarm's name and the on/off
@@ -188,8 +226,8 @@ func (a *App) saveButton(gtx layout.Context) layout.Dimensions {
 	b := material.Button(a.th, &a.editSave, "Opslaan")
 	b.Background = Mocha.Green
 	b.Color = Mocha.Crust
-	b.TextSize = unit.Sp(26)
-	b.CornerRadius = unit.Dp(14)
-	b.Inset = layout.Inset{Top: unit.Dp(16), Bottom: unit.Dp(16), Left: unit.Dp(32), Right: unit.Dp(32)}
+	b.TextSize = unit.Sp(20)
+	b.CornerRadius = unit.Dp(10)
+	b.Inset = layout.Inset{Top: unit.Dp(10), Bottom: unit.Dp(10), Left: unit.Dp(22), Right: unit.Dp(22)}
 	return b.Layout(gtx)
 }

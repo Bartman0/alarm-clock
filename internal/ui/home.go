@@ -28,8 +28,9 @@ func (a *App) layoutHome(gtx layout.Context) layout.Dimensions {
 	if a.btnRadio.Clicked(gtx) {
 		a.openRadio()
 	}
-	// Spotify opens in M6; harmless no-op for now.
-	a.btnSpotify.Clicked(gtx)
+	if a.btnSpotify.Clicked(gtx) {
+		a.openSpotify()
+	}
 
 	inset := layout.UniformInset(unit.Dp(24))
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {

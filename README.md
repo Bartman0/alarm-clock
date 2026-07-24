@@ -44,5 +44,5 @@ Milestone-based build:
 3. ✅ Three alarms + scheduler + firing/snooze screen
 4. ✅ Audio controller + mpv (generated alarm tone, fade-in)
 5. ✅ Internet radio (radio-browser.info) — browse/search, stream via mpv
-6. ⬜ Spotify (OAuth + librespot + search/library)
+6. ✅ Spotify (OAuth PKCE + librespot + search/library + alarm playlist)
 7. ⬜ Kiosk deploy + polish

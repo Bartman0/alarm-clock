@@ -57,10 +57,12 @@ func (k SoundKind) String() string {
 }
 
 // Sound is the audio played when an alarm fires. Ref identifies a bundled
-// sound file (for SoundAlarm) or a Spotify URI (for SoundSpotify).
+// sound file (for SoundAlarm) or a Spotify context URI (for SoundSpotify);
+// Label is a human-readable name for the Spotify choice.
 type Sound struct {
-	Kind SoundKind `json:"kind"`
-	Ref  string    `json:"ref"`
+	Kind  SoundKind `json:"kind"`
+	Ref   string    `json:"ref"`
+	Label string    `json:"label,omitempty"`
 }
 
 // Alarm is a single configurable alarm.
