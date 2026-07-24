@@ -110,6 +110,18 @@ func (p *Player) PlayLoopFadeIn(path string, fade time.Duration, target int) {
 	go p.ramp(cancel, fade, target)
 }
 
+// Play starts a stream/file once at full volume (no loop, no fade) — used for
+// internet radio. Any in-progress fade is cancelled.
+func (p *Player) Play(path string) {
+	if !p.Enabled() {
+		return
+	}
+	p.cancelFade()
+	p.send("set_property", "loop-file", "no")
+	p.send("set_property", "volume", 100)
+	p.send("loadfile", path, "replace")
+}
+
 // Stop halts playback and cancels any fade.
 func (p *Player) Stop() {
 	if !p.Enabled() {

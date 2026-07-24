@@ -43,6 +43,6 @@ Milestone-based build:
 2. ✅ Clock home screen (analog + digital + Dutch date, ticking) + action buttons
 3. ✅ Three alarms + scheduler + firing/snooze screen
 4. ✅ Audio controller + mpv (generated alarm tone, fade-in)
-5. ⬜ Internet radio (radio-browser.info)
+5. ✅ Internet radio (radio-browser.info) — browse/search, stream via mpv
 6. ⬜ Spotify (OAuth + librespot + search/library)
 7. ⬜ Kiosk deploy + polish

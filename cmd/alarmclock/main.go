@@ -41,9 +41,11 @@ func run(w *app.Window) error {
 	if err != nil {
 		log.Printf("loading config: %v (using defaults)", err)
 	}
-	ringer := audio.NewRinger()
-	defer ringer.Close()
-	application := ui.NewApp(ui.NewTheme(), store, ringer)
+	controller := audio.NewController()
+	defer controller.Close()
+	application := ui.NewApp(ui.NewTheme(), store, controller)
+	application.SetRadio(controller)
+	application.SetInvalidate(w.Invalidate)
 
 	// Redraw once a second so the clock stays current and alarms are evaluated.
 	go func() {

@@ -25,8 +25,10 @@ func (a *App) layoutHome(gtx layout.Context) layout.Dimensions {
 	if a.btnAlarms.Clicked(gtx) {
 		a.cur = screenAlarms
 	}
-	// Radio/Spotify open in later milestones; harmless no-ops for now.
-	a.btnRadio.Clicked(gtx)
+	if a.btnRadio.Clicked(gtx) {
+		a.openRadio()
+	}
+	// Spotify opens in M6; harmless no-op for now.
 	a.btnSpotify.Clicked(gtx)
 
 	inset := layout.UniformInset(unit.Dp(24))

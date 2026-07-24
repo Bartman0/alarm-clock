@@ -2,6 +2,7 @@ package ui
 
 import (
 	"log"
+	"sync"
 	"time"
 
 	"gioui.org/layout"
@@ -11,7 +12,12 @@ import (
 	"alarmclock/internal/alarm"
 	"alarmclock/internal/clock"
 	"alarmclock/internal/config"
+	"alarmclock/internal/radio"
 )
+
+// maxRadioResults bounds how many stations we fetch/display, and sizes the
+// pre-allocated per-row clickables.
+const maxRadioResults = 60
 
 type screen int
 
@@ -20,6 +26,7 @@ const (
 	screenAlarms
 	screenEdit
 	screenFiring
+	screenRadio
 )
 
 const (
@@ -34,6 +41,11 @@ type App struct {
 	th     *material.Theme
 	store  *config.Store
 	ringer Ringer
+	radio  RadioPlayer
+
+	// invalidate asks the window to redraw; set by main so async fetches can
+	// refresh the UI promptly (nil in tests).
+	invalidate func()
 
 	cur screen
 	now time.Time // set each frame for use by click handlers
@@ -68,6 +80,20 @@ type App struct {
 	lastFired   [3]time.Time
 	btnSnooze   widget.Clickable
 	btnStop     widget.Clickable
+
+	// Radio screen.
+	radioBack    widget.Clickable
+	radioSearch  widget.Clickable
+	radioStop    widget.Clickable
+	radioQuery   widget.Editor
+	radioList    widget.List
+	radioRows    []widget.Clickable
+	radioClient  *radio.Client
+	radioMu      sync.Mutex
+	radioResults []radio.Station
+	radioLoading bool
+	radioErr     string
+	nowPlaying   string
 }
 
 type alarmRow struct {
@@ -84,12 +110,22 @@ func NewApp(th *material.Theme, store *config.Store, ringer Ringer) *App {
 		cur:        screenHome,
 		editIdx:    -1,
 		ringingIdx: -1,
+		radioRows:  make([]widget.Clickable, maxRadioResults),
 	}
+	a.radioList.Axis = layout.Vertical
+	a.radioQuery.SingleLine = true
+	a.radioQuery.Submit = true
 	for i := range a.rows {
 		a.rows[i].toggle.Value = store.Alarms[i].Enabled
 	}
 	return a
 }
+
+// SetRadio wires the radio player (called by main after construction).
+func (a *App) SetRadio(rp RadioPlayer) { a.radio = rp }
+
+// SetInvalidate sets the redraw callback used to refresh after async fetches.
+func (a *App) SetInvalidate(fn func()) { a.invalidate = fn }
 
 // Layout renders the current screen for the given wall-clock time.
 func (a *App) Layout(gtx layout.Context, now time.Time) layout.Dimensions {
@@ -104,6 +140,8 @@ func (a *App) Layout(gtx layout.Context, now time.Time) layout.Dimensions {
 		return a.layoutEdit(gtx)
 	case screenFiring:
 		return a.layoutFiring(gtx)
+	case screenRadio:
+		return a.layoutRadio(gtx)
 	default:
 		return a.layoutHome(gtx)
 	}
