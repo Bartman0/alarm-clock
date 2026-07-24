@@ -2,8 +2,8 @@
 
 The app is built **natively on the Pi** (Gio needs cgo on Linux, which makes
 cross-compiling from macOS painful). It runs fullscreen as a systemd service
-inside [`cage`](https://github.com/cage-kiosk/cage), a single-application
-Wayland compositor — no desktop required.
+under **sway** as a single-application kiosk compositor (which also rotates the
+display) — no desktop required.
 
 ## 1. System dependencies
 
@@ -20,29 +20,49 @@ sudo apt install -y gcc pkg-config libwayland-dev libx11-dev libx11-xcb-dev \
   libxcursor-dev libvulkan-dev
 
 # Kiosk compositor + audio
-sudo apt install -y cage mpv
+sudo apt install -y sway mpv
 ```
 
 **librespot** (Spotify Connect device) isn't in apt; install a binary or build it:
 
 ```sh
-# via cargo (rustup), or download a prebuilt aarch64 binary to /usr/local/bin
-cargo install librespot
+# Build dependency for librespot's default ALSA backend (provides alsa.pc):
+sudo apt install -y libasound2-dev
+
+# Build via cargo. Use --locked: cargo install otherwise re-resolves build
+# dependencies to their newest versions, which currently pulls an incompatible
+# vergen-lib and breaks librespot-core's build script.
+cargo install librespot --locked
 ```
+
+Requires a recent Rust toolchain (install via https://rustup.rs; the apt
+`rustc` is usually too old). Alternatively, download a prebuilt `aarch64`
+binary from https://github.com/librespot-org/librespot/releases into
+`/usr/local/bin/librespot`.
 
 ## 2. Display orientation
 
-The Touch Display 2 is 720×1280 native; the app expects **landscape 1280×720**.
-Rotate at the compositor/KMS level (the app just uses the resulting resolution).
-For a DSI panel, add to `/boot/firmware/config.txt`, e.g.:
+The Touch Display 2 is 720×1280 native; the app runs **landscape 1280×720**.
+
+**Rotate at the compositor level, not the kernel.** If you rotate with a
+`video=…,rotate=` line in `config.txt` (KMS), the picture rotates but pointer
+and touch input do *not* — the cursor/touch ends up 90° off from what you see.
+Rotate in the Wayland compositor so rendering and input rotate together.
+
+`cage` cannot rotate its output, so this deployment uses **sway** as the kiosk
+compositor (`sudo apt install -y sway`). The service launches
+`sway -c /etc/alarmclock/sway.config`, installed from `deploy/sway/config`:
 
 ```
-dtoverlay=vc4-kms-v3d
-video=DSI-1:720x1280@60,rotate=270
+output DSI-2 transform 270
+default_border none
+xwayland disable
+exec /usr/local/bin/alarmclock
 ```
 
-Adjust `rotate=90|270` for the orientation you want, then reboot. (You can test
-rotation live under Wayland with `wlr-randr --output DSI-1 --transform 270`.)
+This rotates the display to landscape and keeps pointer/touch input aligned.
+Confirm your output name and orientation with `wlr-randr`; if they differ, edit
+`deploy/sway/config` (output name / `transform 90|270`) and re-run the install.
 
 ## 3. Spotify (optional)
 
@@ -70,7 +90,7 @@ re-run `./deploy/install.sh` and `sudo systemctl restart alarmclock`.
 
 ## Troubleshooting
 
-- **Black screen / cage won't start**: ensure the service runs on the seat that
+- **Black screen / sway won't start**: ensure the service runs on the seat that
   owns the display (`TTYPath`), and that the user is in the `video`/`render`
   groups. Check `journalctl -u alarmclock`.
 - **No sound**: verify the output with `mpv <some.mp3>`; set the default sink

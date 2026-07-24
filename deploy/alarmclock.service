@@ -13,9 +13,9 @@ StandardInput=tty
 StandardOutput=journal
 StandardError=journal
 Environment=XDG_RUNTIME_DIR=/run/user/1000
-# cage is a minimal single-application Wayland compositor: it runs only the
-# alarm clock, fullscreen, with no desktop.
-ExecStart=/usr/bin/cage -- /usr/local/bin/alarmclock
+# sway runs as the kiosk compositor: it rotates the display to landscape and
+# launches only the alarm clock, fullscreen (see /etc/alarmclock/sway.config).
+ExecStart=/usr/bin/sway -c /etc/alarmclock/sway.config
 Restart=always
 RestartSec=2
 

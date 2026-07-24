@@ -15,6 +15,9 @@ go build -o alarmclock ./cmd/alarmclock
 echo "==> Installing binary to $PREFIX/bin…"
 sudo install -Dm755 alarmclock "$PREFIX/bin/alarmclock"
 
+echo "==> Installing sway kiosk config…"
+sudo install -Dm644 deploy/sway/config /etc/alarmclock/sway.config
+
 echo "==> Installing systemd service…"
 sudo install -Dm644 deploy/alarmclock.service /etc/systemd/system/alarmclock.service
 sudo sed -i "s/^User=.*/User=$USER_NAME/" /etc/systemd/system/alarmclock.service

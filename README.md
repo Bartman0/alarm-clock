@@ -37,9 +37,9 @@ degrades gracefully: alarms log instead of sounding, and Spotify shows a
 
 ## Deployment (Raspberry Pi)
 
-The app builds natively on the Pi and runs fullscreen via systemd inside the
-`cage` Wayland kiosk compositor. See **[`deploy/README.md`](deploy/README.md)**
-for the full setup; in short:
+The app builds natively on the Pi and runs fullscreen via systemd under the
+`sway` Wayland kiosk compositor (which also handles display rotation). See
+**[`deploy/README.md`](deploy/README.md)** for the full setup; in short:
 
 ```sh
 ./deploy/install.sh            # build, install binary + service, enable on boot
@@ -56,4 +56,4 @@ Milestone-based build:
 4. ✅ Audio controller + mpv (generated alarm tone, fade-in)
 5. ✅ Internet radio (radio-browser.info) — browse/search, stream via mpv
 6. ✅ Spotify (OAuth PKCE + librespot + search/library + alarm playlist)
-7. ✅ Kiosk deploy (cage + systemd) + build/install tooling
+7. ✅ Kiosk deploy (sway + systemd) + build/install tooling

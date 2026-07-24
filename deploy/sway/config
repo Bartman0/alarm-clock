@@ -1,0 +1,16 @@
+# Sway kiosk config for the alarm clock.
+#
+# Rotates the official Touch Display 2 (720x1280 native) to landscape 1280x720
+# and launches the app fullscreen with no decorations. Rotating here — in the
+# compositor — keeps pointer/touch input aligned with the display (rotating via
+# the kernel's video= line does not).
+
+output DSI-2 transform 270
+
+default_border none
+default_floating_border none
+
+# The app is a native Wayland client; no Xwayland needed.
+xwayland disable
+
+exec /usr/local/bin/alarmclock
