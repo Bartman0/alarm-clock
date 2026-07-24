@@ -26,14 +26,25 @@ subprocesses so nothing is decoded in-process:
 ## Development
 
 ```sh
-# Run windowed on a desktop (skips kiosk fullscreen)
-ALARMCLOCK_WINDOWED=1 go run ./cmd/alarmclock
-
-# Build
-go build ./cmd/alarmclock
+make run     # run windowed on a desktop (skips kiosk fullscreen)
+make build   # build the binary
+make test    # run the test suite
 ```
 
-On the Pi the app starts fullscreen (kiosk) via a systemd unit; see `deploy/`.
+Without `mpv`/`librespot`/network (e.g. on a dev Mac) the app runs fine and
+degrades gracefully: alarms log instead of sounding, and Spotify shows a
+"not configured" state.
+
+## Deployment (Raspberry Pi)
+
+The app builds natively on the Pi and runs fullscreen via systemd inside the
+`cage` Wayland kiosk compositor. See **[`deploy/README.md`](deploy/README.md)**
+for the full setup; in short:
+
+```sh
+./deploy/install.sh            # build, install binary + service, enable on boot
+sudo systemctl start alarmclock
+```
 
 ## Status
 
@@ -45,4 +56,4 @@ Milestone-based build:
 4. ✅ Audio controller + mpv (generated alarm tone, fade-in)
 5. ✅ Internet radio (radio-browser.info) — browse/search, stream via mpv
 6. ✅ Spotify (OAuth PKCE + librespot + search/library + alarm playlist)
-7. ⬜ Kiosk deploy + polish
+7. ✅ Kiosk deploy (cage + systemd) + build/install tooling
