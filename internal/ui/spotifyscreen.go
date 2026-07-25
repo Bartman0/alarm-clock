@@ -132,19 +132,25 @@ func (a *App) spotPlayArtist(ar spotify.Artist) {
 			a.refresh()
 			return
 		}
+		// Mute the output while we start the context and skip off the fixed
+		// first track, so the brief wrong-song blip is silent. Always restore.
+		setSystemMute(true)
+		defer setSystemMute(false)
+
 		if err := a.spot.Play(ctx, id, ar.URI, nil); err != nil {
 			a.setSpotStatus("Afspelen mislukt: " + err.Error())
 			a.refresh()
 			return
 		}
 		// Let playback start, then shuffle and skip to a random track.
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(400 * time.Millisecond)
 		if err := a.spot.Shuffle(ctx, id, true); err != nil {
 			log.Printf("spotify: shuffle failed: %v", err)
 		}
 		if err := a.spot.Next(ctx, id); err != nil {
 			log.Printf("spotify: next failed: %v", err)
 		}
+		time.Sleep(150 * time.Millisecond) // let the skip land before unmuting
 		a.refresh()
 	}()
 }

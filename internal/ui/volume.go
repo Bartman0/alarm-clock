@@ -27,6 +27,16 @@ func systemVolume() (float32, bool) {
 	return float32(v), true
 }
 
+// setSystemMute mutes or unmutes the default PipeWire sink (without changing
+// its volume level).
+func setSystemMute(mute bool) {
+	state := "0"
+	if mute {
+		state = "1"
+	}
+	_ = exec.Command("wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", state).Run()
+}
+
 // setSystemVolume sets the default PipeWire sink volume (0..1) via wpctl.
 func setSystemVolume(v float32) {
 	if v < 0 {
