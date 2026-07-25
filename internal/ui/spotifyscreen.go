@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"log"
 	"math/rand"
 	"strings"
 	"time"
@@ -126,17 +127,24 @@ func (a *App) spotPlayArtist(ar spotify.Artist) {
 		defer cancel()
 
 		tracks, err := a.spot.ArtistTopTracks(ctx, ar.ID)
+		if err != nil {
+			log.Printf("spotify: top-tracks for %q (id=%s) failed: %v", ar.Name, ar.ID, err)
+		}
 		if err == nil && len(tracks) > 0 {
 			uris := make([]string, len(tracks))
 			for i, t := range tracks {
 				uris[i] = t.URI
 			}
 			rand.Shuffle(len(uris), func(i, j int) { uris[i], uris[j] = uris[j], uris[i] })
+			log.Printf("spotify: playing %d shuffled top tracks for %q, first=%s", len(uris), ar.Name, uris[0])
 			if perr := a.spot.PlayOnDevice(ctx, a.spotDevice, "", uris); perr != nil {
 				a.setSpotStatus("Afspelen mislukt: " + perr.Error())
 			}
-		} else if perr := a.spot.PlayOnDevice(ctx, a.spotDevice, ar.URI, nil); perr != nil {
-			a.setSpotStatus("Afspelen mislukt: " + perr.Error())
+		} else {
+			log.Printf("spotify: falling back to artist context for %q (tracks=%d)", ar.Name, len(tracks))
+			if perr := a.spot.PlayOnDevice(ctx, a.spotDevice, ar.URI, nil); perr != nil {
+				a.setSpotStatus("Afspelen mislukt: " + perr.Error())
+			}
 		}
 		a.refresh()
 	}()
