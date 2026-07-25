@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // SearchArtists searches for artists by name.
@@ -13,12 +14,14 @@ func (c *Client) SearchArtists(ctx context.Context, query string, limit int) ([]
 	q.Set("q", query)
 	q.Set("type", "artist")
 	q.Set("limit", strconv.Itoa(limit))
+	// Spotify's search can reject '+'-encoded spaces; use %20.
+	raw := strings.ReplaceAll(q.Encode(), "+", "%20")
 	var body struct {
 		Artists struct {
 			Items []Artist `json:"items"`
 		} `json:"artists"`
 	}
-	if err := c.apiGet(ctx, "/search?"+q.Encode(), &body); err != nil {
+	if err := c.apiGet(ctx, "/search?"+raw, &body); err != nil {
 		return nil, err
 	}
 	return body.Artists.Items, nil

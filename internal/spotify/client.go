@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -159,9 +160,15 @@ func (c *Client) apiGet(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("spotify GET %s: %s", path, resp.Status)
+		return fmt.Errorf("spotify GET %s: %s: %s", path, resp.Status, errBody(resp))
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// errBody reads a short prefix of an error response body for diagnostics.
+func errBody(resp *http.Response) string {
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	return strings.TrimSpace(string(b))
 }
 
 // apiSend performs an authorized PUT/POST with an optional JSON body. 2xx and
@@ -193,7 +200,7 @@ func (c *Client) apiSend(ctx context.Context, method, path string, body any) err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("spotify %s %s: %s", method, path, resp.Status)
+		return fmt.Errorf("spotify %s %s: %s: %s", method, path, resp.Status, errBody(resp))
 	}
 	return nil
 }
