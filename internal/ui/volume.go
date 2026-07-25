@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -34,7 +35,9 @@ func setSystemMute(mute bool) {
 	if mute {
 		state = "1"
 	}
-	_ = exec.Command("wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", state).Run()
+	if out, err := exec.Command("wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", state).CombinedOutput(); err != nil {
+		log.Printf("wpctl set-mute %s failed: %v: %s", state, err, strings.TrimSpace(string(out)))
+	}
 }
 
 // setSystemVolume sets the default PipeWire sink volume (0..1) via wpctl.

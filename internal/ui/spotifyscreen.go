@@ -133,7 +133,7 @@ func (a *App) spotPlayArtist(ar spotify.Artist) {
 			return
 		}
 		// Mute the output while we start the context and skip off the fixed
-		// first track, so the brief wrong-song blip is silent. Always restore.
+		// first track, so the wrong-song blip is silent. Always restore.
 		setSystemMute(true)
 		defer setSystemMute(false)
 
@@ -142,17 +142,38 @@ func (a *App) spotPlayArtist(ar spotify.Artist) {
 			a.refresh()
 			return
 		}
-		// Let playback start, then shuffle and skip to a random track.
-		time.Sleep(400 * time.Millisecond)
+		// Wait until the device is actually playing before shuffling/skipping,
+		// so the mute reliably covers the whole false-start (playback start
+		// latency over Spotify Connect is variable).
+		if !a.waitActive(ctx, id, 5*time.Second) {
+			log.Printf("spotify: device %q did not become active in time", a.spotDevice)
+		}
 		if err := a.spot.Shuffle(ctx, id, true); err != nil {
 			log.Printf("spotify: shuffle failed: %v", err)
 		}
 		if err := a.spot.Next(ctx, id); err != nil {
 			log.Printf("spotify: next failed: %v", err)
 		}
-		time.Sleep(150 * time.Millisecond) // let the skip land before unmuting
+		time.Sleep(500 * time.Millisecond) // let the skip land before unmuting
 		a.refresh()
 	}()
+}
+
+// waitActive polls until the named device reports active playback, or max
+// elapses. Returns whether it became active.
+func (a *App) waitActive(ctx context.Context, deviceID string, max time.Duration) bool {
+	deadline := time.Now().Add(max)
+	for time.Now().Before(deadline) {
+		if devs, err := a.spot.Devices(ctx); err == nil {
+			for _, d := range devs {
+				if d.ID == deviceID && d.IsActive {
+					return true
+				}
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return false
 }
 
 func (a *App) spotPlay(uri, name string) {
