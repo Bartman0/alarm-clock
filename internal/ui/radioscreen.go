@@ -142,6 +142,15 @@ func (a *App) layoutRadio(gtx layout.Context) layout.Dimensions {
 					return a.layoutStationRow(gtx, results[i], i)
 				})
 			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					dims, search := a.kbd.Layout(gtx, a.th, &a.radioQuery)
+					if search {
+						a.fetchRadio(strings.TrimSpace(a.radioQuery.Text()))
+					}
+					return dims
+				})
+			}),
 		)
 	})
 }

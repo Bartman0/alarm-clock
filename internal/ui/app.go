@@ -129,6 +129,9 @@ type App struct {
 
 	// Editor: pick-a-Spotify-playlist button.
 	editPick widget.Clickable
+
+	// Shared on-screen keyboard for the search fields.
+	kbd *keyboard
 }
 
 type alarmRow struct {
@@ -147,6 +150,7 @@ func NewApp(th *material.Theme, store *config.Store, ringer Ringer) *App {
 		ringingIdx: -1,
 		radioRows:  make([]widget.Clickable, maxRadioResults),
 		spotRows:   make([]widget.Clickable, maxSpotItems),
+		kbd:        newKeyboard(),
 	}
 	a.radioList.Axis = layout.Vertical
 	a.radioQuery.SingleLine = true

@@ -299,6 +299,18 @@ func (a *App) layoutSpotify(gtx layout.Context) layout.Dimensions {
 					return a.spotItemRow(gtx, i, st.artists[i].Name, "Artiest")
 				})
 			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if inLibrary {
+					return layout.Dimensions{} // no keyboard when browsing playlists
+				}
+				return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					dims, search := a.kbd.Layout(gtx, a.th, &a.spotQuery)
+					if search {
+						a.spotFetchArtists(strings.TrimSpace(a.spotQuery.Text()))
+					}
+					return dims
+				})
+			}),
 		)
 	})
 }
