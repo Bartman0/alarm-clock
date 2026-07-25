@@ -75,6 +75,9 @@ func (s *Supervisor) loop() {
 			"--bitrate", "320",
 			"--cache", s.cacheDir,
 			"--disable-audio-cache",
+			// Start at full Connect volume; the USB speaker/PipeWire sink set
+			// the actual level, so a low default just makes it seem quiet.
+			"--initial-volume", "100",
 		)
 		s.mu.Lock()
 		s.cmd = cmd
