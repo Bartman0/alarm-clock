@@ -60,6 +60,11 @@ type App struct {
 	btnRadio   widget.Clickable
 	btnSpotify widget.Clickable
 
+	// Master volume slider (drives the PipeWire default sink).
+	volume     widget.Float
+	volInit    bool
+	volApplied int
+
 	// Alarms-list widgets.
 	rows          [3]alarmRow
 	btnAlarmsBack widget.Clickable

@@ -32,6 +32,22 @@ func (a *App) layoutHome(gtx layout.Context) layout.Dimensions {
 		a.openSpotify()
 	}
 
+	// Master volume: seed the slider from the system once, then push changes
+	// (throttled to whole-percent steps) to the PipeWire sink.
+	if !a.volInit {
+		if v, ok := systemVolume(); ok {
+			a.volume.Value = v
+		} else {
+			a.volume.Value = 0.6
+		}
+		a.volApplied = int(a.volume.Value*100 + 0.5)
+		a.volInit = true
+	}
+	if pct := int(a.volume.Value*100 + 0.5); pct != a.volApplied {
+		a.volApplied = pct
+		go setSystemVolume(float32(pct) / 100)
+	}
+
 	inset := layout.UniformInset(unit.Dp(24))
 	return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -108,6 +124,19 @@ func (a *App) layoutDigital(gtx layout.Context) layout.Dimensions {
 			l.Color = Mocha.Subtext0
 			l.Alignment = text.End
 			return l.Layout(gtx)
+		}),
+		// Master volume slider, horizontal, under the date.
+		layout.Rigid(layout.Spacer{Height: unit.Dp(28)}.Layout),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			l := material.Label(a.th, unit.Sp(22), "Volume")
+			l.Color = Mocha.Overlay1
+			l.Alignment = text.End
+			return layout.Inset{Bottom: unit.Dp(4)}.Layout(gtx, l.Layout)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			sl := material.Slider(a.th, &a.volume)
+			sl.Color = Mocha.Mauve
+			return sl.Layout(gtx)
 		}),
 	)
 }
