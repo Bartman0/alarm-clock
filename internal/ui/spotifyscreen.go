@@ -44,7 +44,7 @@ func (a *App) spotFetchArtists(query string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		res, err := a.spot.SearchArtists(ctx, query, maxSpotItems)
+		res, err := a.spot.SearchArtists(ctx, query, spotSearchLimit)
 		a.spotMu.Lock()
 		a.spotLoading = false
 		if err != nil {

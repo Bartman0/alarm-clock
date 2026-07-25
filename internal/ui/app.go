@@ -21,6 +21,9 @@ import (
 const (
 	maxRadioResults = 60
 	maxSpotItems    = 50
+	// spotSearchLimit is kept modest: Spotify's search endpoint rejects the
+	// documented max of 50 for some accounts with "invalid limit".
+	spotSearchLimit = 20
 )
 
 type screen int
