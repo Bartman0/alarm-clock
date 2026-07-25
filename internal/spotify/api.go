@@ -113,6 +113,24 @@ func (c *Client) Pause(ctx context.Context) error {
 	return c.apiSend(ctx, "PUT", "/me/player/pause", nil)
 }
 
+// Shuffle sets the shuffle state on the given device.
+func (c *Client) Shuffle(ctx context.Context, deviceID string, state bool) error {
+	path := fmt.Sprintf("/me/player/shuffle?state=%t", state)
+	if deviceID != "" {
+		path += "&device_id=" + url.QueryEscape(deviceID)
+	}
+	return c.apiSend(ctx, "PUT", path, nil)
+}
+
+// Next skips to the next track on the given device.
+func (c *Client) Next(ctx context.Context, deviceID string) error {
+	path := "/me/player/next"
+	if deviceID != "" {
+		path += "?device_id=" + url.QueryEscape(deviceID)
+	}
+	return c.apiSend(ctx, "POST", path, nil)
+}
+
 // Transfer moves playback to the given device (and starts playing).
 func (c *Client) Transfer(ctx context.Context, deviceID string) error {
 	return c.apiSend(ctx, "PUT", "/me/player", map[string]any{

@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"log"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -114,9 +113,10 @@ func (a *App) spotConnectStart() {
 	}()
 }
 
-// spotPlayArtist plays an artist's top tracks in a randomized order, so it
-// doesn't always start on the same (#1) track. Falls back to the artist
-// context if the top-tracks lookup fails.
+// spotPlayArtist plays an artist and randomizes the starting track. The
+// catalog top-tracks endpoint is Forbidden for this app's token, so we use
+// playback controls instead: start the artist context, enable shuffle, then
+// skip off the deterministic first track.
 func (a *App) spotPlayArtist(ar spotify.Artist) {
 	if a.spot == nil {
 		return
@@ -126,25 +126,24 @@ func (a *App) spotPlayArtist(ar spotify.Artist) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
-		tracks, err := a.spot.ArtistTopTracks(ctx, ar.ID)
-		if err != nil {
-			log.Printf("spotify: top-tracks for %q (id=%s) failed: %v", ar.Name, ar.ID, err)
+		id, ok, err := a.spot.DeviceIDByName(ctx, a.spotDevice)
+		if err != nil || !ok {
+			a.setSpotStatus("Afspelen mislukt: apparaat \"" + a.spotDevice + "\" niet gevonden")
+			a.refresh()
+			return
 		}
-		if err == nil && len(tracks) > 0 {
-			uris := make([]string, len(tracks))
-			for i, t := range tracks {
-				uris[i] = t.URI
-			}
-			rand.Shuffle(len(uris), func(i, j int) { uris[i], uris[j] = uris[j], uris[i] })
-			log.Printf("spotify: playing %d shuffled top tracks for %q, first=%s", len(uris), ar.Name, uris[0])
-			if perr := a.spot.PlayOnDevice(ctx, a.spotDevice, "", uris); perr != nil {
-				a.setSpotStatus("Afspelen mislukt: " + perr.Error())
-			}
-		} else {
-			log.Printf("spotify: falling back to artist context for %q (tracks=%d)", ar.Name, len(tracks))
-			if perr := a.spot.PlayOnDevice(ctx, a.spotDevice, ar.URI, nil); perr != nil {
-				a.setSpotStatus("Afspelen mislukt: " + perr.Error())
-			}
+		if err := a.spot.Play(ctx, id, ar.URI, nil); err != nil {
+			a.setSpotStatus("Afspelen mislukt: " + err.Error())
+			a.refresh()
+			return
+		}
+		// Let playback start, then shuffle and skip to a random track.
+		time.Sleep(500 * time.Millisecond)
+		if err := a.spot.Shuffle(ctx, id, true); err != nil {
+			log.Printf("spotify: shuffle failed: %v", err)
+		}
+		if err := a.spot.Next(ctx, id); err != nil {
+			log.Printf("spotify: next failed: %v", err)
 		}
 		a.refresh()
 	}()
