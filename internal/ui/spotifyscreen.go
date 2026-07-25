@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -107,6 +108,35 @@ func (a *App) spotConnectStart() {
 		a.spotMu.Unlock()
 		if err == nil {
 			a.spotFetchPlaylists()
+		}
+		a.refresh()
+	}()
+}
+
+// spotPlayArtist plays an artist's top tracks in a randomized order, so it
+// doesn't always start on the same (#1) track. Falls back to the artist
+// context if the top-tracks lookup fails.
+func (a *App) spotPlayArtist(ar spotify.Artist) {
+	if a.spot == nil {
+		return
+	}
+	a.setSpotStatus("Afspelen: " + ar.Name)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		tracks, err := a.spot.ArtistTopTracks(ctx, ar.ID)
+		if err == nil && len(tracks) > 0 {
+			uris := make([]string, len(tracks))
+			for i, t := range tracks {
+				uris[i] = t.URI
+			}
+			rand.Shuffle(len(uris), func(i, j int) { uris[i], uris[j] = uris[j], uris[i] })
+			if perr := a.spot.PlayOnDevice(ctx, a.spotDevice, "", uris); perr != nil {
+				a.setSpotStatus("Afspelen mislukt: " + perr.Error())
+			}
+		} else if perr := a.spot.PlayOnDevice(ctx, a.spotDevice, ar.URI, nil); perr != nil {
+			a.setSpotStatus("Afspelen mislukt: " + perr.Error())
 		}
 		a.refresh()
 	}()
@@ -273,7 +303,7 @@ func (a *App) layoutSpotify(gtx layout.Context) layout.Dimensions {
 			if inLibrary {
 				a.selectPlaylist(st.playlists[i])
 			} else {
-				a.spotPlay(st.artists[i].URI, st.artists[i].Name)
+				a.spotPlayArtist(st.artists[i])
 			}
 		}
 	}
