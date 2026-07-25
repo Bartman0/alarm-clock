@@ -4,17 +4,18 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 )
 
 // SearchArtists searches for artists by name.
-func (c *Client) SearchArtists(ctx context.Context, query string, limit int) ([]Artist, error) {
+//
+// We deliberately send no "limit": some Spotify apps/tokens (development-mode)
+// reject an explicit limit with 400 "Invalid limit", so we take the default.
+// Spotify's search can also reject '+'-encoded spaces, so we use %20.
+func (c *Client) SearchArtists(ctx context.Context, query string) ([]Artist, error) {
 	q := url.Values{}
 	q.Set("q", query)
 	q.Set("type", "artist")
-	q.Set("limit", strconv.Itoa(limit))
-	// Spotify's search can reject '+'-encoded spaces; use %20.
 	raw := strings.ReplaceAll(q.Encode(), "+", "%20")
 	var body struct {
 		Artists struct {
@@ -39,25 +40,26 @@ func (c *Client) ArtistTopTracks(ctx context.Context, artistID string) ([]Track,
 	return body.Tracks, nil
 }
 
-// SavedPlaylists returns the current user's playlists.
-func (c *Client) SavedPlaylists(ctx context.Context, limit int) ([]Playlist, error) {
+// SavedPlaylists returns the current user's playlists (Spotify's default page
+// size; see the note on SearchArtists about omitting an explicit limit).
+func (c *Client) SavedPlaylists(ctx context.Context) ([]Playlist, error) {
 	var body struct {
 		Items []Playlist `json:"items"`
 	}
-	if err := c.apiGet(ctx, "/me/playlists?limit="+strconv.Itoa(limit), &body); err != nil {
+	if err := c.apiGet(ctx, "/me/playlists", &body); err != nil {
 		return nil, err
 	}
 	return body.Items, nil
 }
 
 // FollowedArtists returns the artists the user follows.
-func (c *Client) FollowedArtists(ctx context.Context, limit int) ([]Artist, error) {
+func (c *Client) FollowedArtists(ctx context.Context) ([]Artist, error) {
 	var body struct {
 		Artists struct {
 			Items []Artist `json:"items"`
 		} `json:"artists"`
 	}
-	if err := c.apiGet(ctx, "/me/following?type=artist&limit="+strconv.Itoa(limit), &body); err != nil {
+	if err := c.apiGet(ctx, "/me/following?type=artist", &body); err != nil {
 		return nil, err
 	}
 	return body.Artists.Items, nil

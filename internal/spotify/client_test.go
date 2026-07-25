@@ -35,7 +35,7 @@ func TestApiRefreshesExpiredToken(t *testing.T) {
 	c.accounts = accounts.URL
 	c.api = api.URL
 
-	if _, err := c.SearchArtists(context.Background(), "x", 5); err != nil {
+	if _, err := c.SearchArtists(context.Background(), "x"); err != nil {
 		t.Fatal(err)
 	}
 	if gotAuth != "Bearer NEW" {
@@ -59,7 +59,7 @@ func TestSearchArtistsParses(t *testing.T) {
 	defer api.Close()
 
 	c := validClient(api.URL)
-	got, err := c.SearchArtists(context.Background(), "radiohead", 5)
+	got, err := c.SearchArtists(context.Background(), "radiohead")
 	if err != nil {
 		t.Fatal(err)
 	}
