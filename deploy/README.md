@@ -26,8 +26,10 @@ sudo apt install -y gcc pkg-config \
   libegl1-mesa-dev libgles2-mesa-dev libffi-dev libxcursor-dev libvulkan-dev
 # If libegl1-mesa-dev / libgles2-mesa-dev are missing, use libegl-dev / libgles-dev.
 
-# Kiosk compositor + audio
-sudo apt install -y sway mpv
+# Kiosk compositor + audio. pipewire-alsa is essential: without it, ALSA
+# clients (librespot) grab the sound card directly and starve PipeWire, so
+# radio/alarm audio goes silent. rtkit gives PipeWire realtime scheduling.
+sudo apt install -y sway mpv pipewire-alsa rtkit
 ```
 
 **librespot** (Spotify Connect device) isn't in apt; install a binary or build it:
@@ -112,8 +114,11 @@ the app fullscreen. To update: `git pull && ./deploy/install.sh && sudo reboot`.
   (`Seat: seat0`, `Active: yes`). If it fails even on tty1, install the seatd
   fallback: `sudo apt install -y seatd && sudo systemctl enable --now seatd`, add
   yourself to `video,render,input,_seatd`, and reboot.
-- **No sound**: verify the output with `mpv <some.mp3>`; set the default sink
-  with `wpctl`/`raspi-config`. The alarm tone is generated on first run at
+- **No sound**: make sure `pipewire-alsa` is installed (`ls
+  /usr/share/alsa/alsa.conf.d/ | grep -i pipewire`). Without it, librespot
+  seizes the USB card and PipeWire falls back to a Dummy sink → silence. Check
+  the default sink and volume with `wpctl status` / `wpctl set-volume
+  @DEFAULT_AUDIO_SINK@ 0.9`. The alarm tone is generated on first run at
   `~/.cache/alarmclock/alarm.wav`.
 - **Spotify "device not found"**: activate the "Wekker" device once from the
   Spotify phone app; confirm librespot is running (`pgrep librespot`).

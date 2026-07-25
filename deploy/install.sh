@@ -23,7 +23,8 @@ if [ "${SKIP_APT:-0}" != "1" ] && command -v apt-get >/dev/null 2>&1; then
 		libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
 		libx11-dev libx11-xcb-dev \
 		libegl1-mesa-dev libgles2-mesa-dev libffi-dev libxcursor-dev libvulkan-dev \
-		sway mpv libasound2-dev
+		sway mpv libasound2-dev \
+		pipewire-alsa rtkit
 fi
 
 # 2. Build. The novulkan tag drops Gio's Vulkan backend, which crashes on the
