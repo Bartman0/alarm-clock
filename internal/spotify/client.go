@@ -20,6 +20,8 @@ var Scopes = []string{
 	"user-read-playback-state",
 	"user-modify-playback-state",
 	"playlist-read-private",
+	"playlist-modify-private",
+	"playlist-modify-public",
 	"user-follow-read",
 	"user-library-read",
 }
