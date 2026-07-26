@@ -304,9 +304,7 @@ func (a *App) layoutSpotify(gtx layout.Context) layout.Dimensions {
 	}
 	if a.spotTabLibrary.Clicked(gtx) {
 		a.spotTab = 1
-		if len(st.playlists) == 0 {
-			a.spotFetchPlaylists()
-		}
+		a.spotFetchPlaylists() // always refresh so newly-followed playlists appear
 	}
 	if a.spotSearchBtn.Clicked(gtx) {
 		a.spotFetchArtists(strings.TrimSpace(a.spotQuery.Text()))
