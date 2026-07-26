@@ -117,11 +117,14 @@ func (a *App) spotConnectStart() {
 // catalog top-tracks endpoint is Forbidden for this app's token, so we use
 // playback controls instead: start the artist context, enable shuffle, then
 // skip off the deterministic first track.
-func (a *App) spotPlayArtist(ar spotify.Artist) {
+// spotPlayShuffled plays a context (artist or playlist) with a randomized
+// start: begin the context, enable shuffle, then skip off the fixed first
+// track. The output is muted for that window so the false-start is silent.
+func (a *App) spotPlayShuffled(uri, name string) {
 	if a.spot == nil {
 		return
 	}
-	a.setSpotStatus("Afspelen: " + ar.Name)
+	a.setSpotStatus("Afspelen: " + name)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
@@ -137,7 +140,7 @@ func (a *App) spotPlayArtist(ar spotify.Artist) {
 		setSystemMute(true)
 		defer setSystemMute(false)
 
-		if err := a.spot.Play(ctx, id, ar.URI, nil); err != nil {
+		if err := a.spot.Play(ctx, id, uri, nil); err != nil {
 			a.setSpotStatus("Afspelen mislukt: " + err.Error())
 			a.refresh()
 			return
@@ -174,21 +177,6 @@ func (a *App) waitActive(ctx context.Context, deviceID string, max time.Duration
 		time.Sleep(250 * time.Millisecond)
 	}
 	return false
-}
-
-func (a *App) spotPlay(uri, name string) {
-	if a.spot == nil {
-		return
-	}
-	a.setSpotStatus("Afspelen: " + name)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := a.spot.PlayOnDevice(ctx, a.spotDevice, uri, nil); err != nil {
-			a.setSpotStatus("Afspelen mislukt: " + err.Error())
-		}
-		a.refresh()
-	}()
 }
 
 func (a *App) pauseSpotify() {
@@ -335,7 +323,7 @@ func (a *App) layoutSpotify(gtx layout.Context) layout.Dimensions {
 			if inLibrary {
 				a.selectPlaylist(st.playlists[i])
 			} else {
-				a.spotPlayArtist(st.artists[i])
+				a.spotPlayShuffled(st.artists[i].URI, st.artists[i].Name)
 			}
 		}
 	}
@@ -388,7 +376,7 @@ func (a *App) selectPlaylist(p spotify.Playlist) {
 		a.cur = screenEdit
 		return
 	}
-	a.spotPlay(p.URI, p.Name)
+	a.spotPlayShuffled(p.URI, p.Name)
 }
 
 // layoutSpotifyHeader is the header plus (when not picking) the tab toggle and
