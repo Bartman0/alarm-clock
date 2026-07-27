@@ -6,8 +6,8 @@ import (
 	"gioui.org/widget/material"
 )
 
-// layoutAlarms shows the three alarms with an on/off switch each; tapping a row
-// opens the editor.
+// layoutAlarms shows the alarms in a scrollable list with an on/off switch
+// each; tapping a row opens the editor.
 func (a *App) layoutAlarms(gtx layout.Context) layout.Dimensions {
 	if a.btnAlarmsBack.Clicked(gtx) {
 		a.cur = screenHome
@@ -24,14 +24,12 @@ func (a *App) layoutAlarms(gtx layout.Context) layout.Dimensions {
 				return header(gtx, a.th, &a.btnAlarmsBack, "Alarmen")
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return a.layoutAlarmRow(gtx, 0) }),
-					layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return a.layoutAlarmRow(gtx, 1) }),
-					layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions { return a.layoutAlarmRow(gtx, 2) }),
-				)
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return material.List(a.th, &a.alarmsList).Layout(gtx, len(a.rows), func(gtx layout.Context, i int) layout.Dimensions {
+					return layout.Inset{Bottom: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+						return a.layoutAlarmRow(gtx, i)
+					})
+				})
 			}),
 		)
 	})

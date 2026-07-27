@@ -13,8 +13,8 @@ import (
 
 // Store holds all persisted state and knows where to write it.
 type Store struct {
-	Alarms  [3]alarm.Alarm  `json:"alarms"`
-	Spotify SpotifySettings `json:"spotify"`
+	Alarms  [alarm.Count]alarm.Alarm `json:"alarms"`
+	Spotify SpotifySettings          `json:"spotify"`
 
 	path string
 }
@@ -35,12 +35,14 @@ func defaultPath() string {
 	return filepath.Join(dir, "alarmclock", "config.json")
 }
 
-// defaults returns the initial three alarms, all disabled.
-func defaults() [3]alarm.Alarm {
-	return [3]alarm.Alarm{
+// defaults returns the initial alarms, all disabled.
+func defaults() [alarm.Count]alarm.Alarm {
+	return [alarm.Count]alarm.Alarm{
 		{Hour: 7, Minute: 0, Rhythm: alarm.Workweek},
 		{Hour: 9, Minute: 0, Rhythm: alarm.Weekend},
 		{Hour: 8, Minute: 0, Rhythm: alarm.FullWeek},
+		{Hour: 7, Minute: 30, Rhythm: alarm.Workweek},
+		{Hour: 10, Minute: 0, Rhythm: alarm.Weekend},
 	}
 }
 

@@ -66,7 +66,8 @@ type App struct {
 	volApplied int
 
 	// Alarms-list widgets.
-	rows          [3]alarmRow
+	rows          [alarm.Count]alarmRow
+	alarmsList    widget.List
 	btnAlarmsBack widget.Clickable
 
 	// Edit-screen widgets.
@@ -77,7 +78,7 @@ type App struct {
 	hourDown   widget.Clickable
 	minUp      widget.Clickable
 	minDown    widget.Clickable
-	rhythmBtns [3]widget.Clickable
+	rhythmBtns [4]widget.Clickable
 	soundBtns  [2]widget.Clickable
 	editSave   widget.Clickable
 	editCancel widget.Clickable
@@ -87,7 +88,7 @@ type App struct {
 	ringStart   time.Time
 	snoozeUntil time.Time
 	snoozeIdx   int
-	lastFired   [3]time.Time
+	lastFired   [alarm.Count]time.Time
 	btnSnooze   widget.Clickable
 	btnStop     widget.Clickable
 
@@ -152,6 +153,7 @@ func NewApp(th *material.Theme, store *config.Store, ringer Ringer) *App {
 		spotRows:   make([]widget.Clickable, maxSpotItems),
 		kbd:        newKeyboard(),
 	}
+	a.alarmsList.Axis = layout.Vertical
 	a.radioList.Axis = layout.Vertical
 	a.radioQuery.SingleLine = true
 	a.radioQuery.Submit = true
@@ -226,6 +228,12 @@ func (a *App) tick(now time.Time) {
 		// second same-minute trigger).
 		if al.Hour == now.Hour() && al.Minute == now.Minute() && !sameMinute(a.lastFired[i], now) {
 			a.lastFired[i] = now
+			// A one-time (Eenmalig) alarm disables itself after firing.
+			if al.Rhythm == alarm.Once {
+				a.store.Alarms[i].Enabled = false
+				a.rows[i].toggle.Value = false
+				a.save()
+			}
 			a.startRinging(i, now)
 			return
 		}

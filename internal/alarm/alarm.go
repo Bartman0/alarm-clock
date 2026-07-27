@@ -1,4 +1,4 @@
-// Package alarm defines the alarm domain model: the three configurable alarms,
+// Package alarm defines the alarm domain model: the configurable alarms,
 // their weekly rhythm, the chosen sound, and next-fire computation.
 package alarm
 
@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// Count is the number of configurable alarms.
+const Count = 5
+
 // Rhythm decides on which weekdays an alarm is active.
 type Rhythm int
 
@@ -14,16 +17,19 @@ const (
 	FullWeek Rhythm = iota // every day
 	Workweek               // Monday–Friday
 	Weekend                // Saturday & Sunday
+	Once                   // once, then it disables itself
 )
 
-// Active reports whether the alarm should fire on the given weekday.
+// Active reports whether the alarm should fire on the given weekday. Once is
+// active every day: it fires at the next occurrence of its time and then
+// disables itself (handled by the scheduler).
 func (r Rhythm) Active(wd time.Weekday) bool {
 	switch r {
 	case Workweek:
 		return wd >= time.Monday && wd <= time.Friday
 	case Weekend:
 		return wd == time.Saturday || wd == time.Sunday
-	default: // FullWeek
+	default: // FullWeek, Once
 		return true
 	}
 }
@@ -35,6 +41,8 @@ func (r Rhythm) String() string {
 		return "Werkweek"
 	case Weekend:
 		return "Weekend"
+	case Once:
+		return "Eenmalig"
 	default:
 		return "Hele week"
 	}

@@ -39,7 +39,8 @@ func (a *App) layoutEdit(gtx layout.Context) layout.Dimensions {
 						return layout.Flex{Axis: layout.Horizontal}.Layout(gtx,
 							a.rhythmSeg(alarm.FullWeek), spacer12,
 							a.rhythmSeg(alarm.Workweek), spacer12,
-							a.rhythmSeg(alarm.Weekend),
+							a.rhythmSeg(alarm.Weekend), spacer12,
+							a.rhythmSeg(alarm.Once),
 						)
 					})
 				})

@@ -29,6 +29,8 @@ func TestRhythmActive(t *testing.T) {
 		{Weekend, time.Saturday, true},
 		{Weekend, time.Sunday, true},
 		{Weekend, time.Wednesday, false},
+		{Once, time.Monday, true},
+		{Once, time.Sunday, true},
 	}
 	for _, c := range cases {
 		if got := c.r.Active(c.wd); got != c.want {
@@ -77,6 +79,24 @@ func TestNextWorkweekSkipsWeekend(t *testing.T) {
 	}
 	if got.Weekday() != time.Monday || got.Hour() != 7 {
 		t.Errorf("got %v (%v), want Monday 07:00", got, got.Weekday())
+	}
+}
+
+func TestNextOnceRollsToNextOccurrence(t *testing.T) {
+	now := onWeekday(time.Wednesday) // 12:00
+	a := Alarm{Enabled: true, Hour: 7, Rhythm: Once}
+	got, ok := a.Next(now)
+	if !ok {
+		t.Fatal("expected a next fire time")
+	}
+	if got.Weekday() != time.Thursday || got.Hour() != 7 {
+		t.Errorf("got %v, want Thursday 07:00 (next occurrence)", got)
+	}
+}
+
+func TestRhythmStringOnce(t *testing.T) {
+	if Once.String() != "Eenmalig" {
+		t.Errorf("Once.String() = %q, want Eenmalig", Once.String())
 	}
 }
 

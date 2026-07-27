@@ -104,6 +104,21 @@ func TestSnoozeNotOverriddenLaterInSameMinute(t *testing.T) {
 	}
 }
 
+func TestOnceAlarmDisablesItselfAfterFiring(t *testing.T) {
+	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.Once})
+
+	app.now = now
+	app.tick(now)
+
+	if r.started != 1 || app.cur != screenFiring {
+		t.Fatalf("Once alarm did not fire: started=%d cur=%v", r.started, app.cur)
+	}
+	if app.store.Alarms[0].Enabled {
+		t.Fatal("Once alarm should disable itself after firing")
+	}
+}
+
 func TestDisabledAlarmDoesNotFire(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: false, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
