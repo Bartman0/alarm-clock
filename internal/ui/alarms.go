@@ -26,7 +26,7 @@ func (a *App) layoutAlarms(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				return material.List(a.th, &a.alarmsList).Layout(gtx, len(a.rows), func(gtx layout.Context, i int) layout.Dimensions {
-					return layout.Inset{Bottom: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layout.Inset{Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 						return a.layoutAlarmRow(gtx, i)
 					})
 				})
@@ -46,21 +46,22 @@ func (a *App) layoutAlarmRow(gtx layout.Context, i int) layout.Dimensions {
 				return row.tap.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							l := material.Label(a.th, unit.Sp(64), al.TimeString())
+							l := material.Label(a.th, unit.Sp(46), al.TimeString())
 							l.Color = colorIf(al.Enabled, Mocha.Text, Mocha.Overlay0)
 							l.Font.Weight = 600
 							return l.Layout(gtx)
 						}),
 						layout.Rigid(layout.Spacer{Width: unit.Dp(24)}.Layout),
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+							return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									l := material.Label(a.th, unit.Sp(26), al.Rhythm.String())
+									l := material.Label(a.th, unit.Sp(22), al.Rhythm.String())
 									l.Color = colorIf(al.Enabled, Mocha.Mauve, Mocha.Overlay0)
 									return l.Layout(gtx)
 								}),
+								layout.Rigid(layout.Spacer{Width: unit.Dp(12)}.Layout),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									l := material.Label(a.th, unit.Sp(22), al.Sound.Kind.String())
+									l := material.Label(a.th, unit.Sp(18), "· "+al.Sound.Kind.String())
 									l.Color = Mocha.Overlay1
 									return l.Layout(gtx)
 								}),
@@ -88,7 +89,7 @@ func (a *App) layoutAlarmRow(gtx layout.Context, i int) layout.Dimensions {
 
 // widgetCard wraps content in a rounded Surface0 panel.
 func widgetCard(gtx layout.Context, w layout.Widget) layout.Dimensions {
-	return roundedPanel(gtx, Mocha.Surface0, unit.Dp(16), func(gtx layout.Context) layout.Dimensions {
-		return layout.UniformInset(unit.Dp(18)).Layout(gtx, w)
+	return roundedPanel(gtx, Mocha.Surface0, unit.Dp(14), func(gtx layout.Context) layout.Dimensions {
+		return layout.Inset{Top: unit.Dp(10), Bottom: unit.Dp(10), Left: unit.Dp(18), Right: unit.Dp(18)}.Layout(gtx, w)
 	})
 }
