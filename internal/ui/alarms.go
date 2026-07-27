@@ -61,7 +61,7 @@ func (a *App) layoutAlarmRow(gtx layout.Context, i int) layout.Dimensions {
 								}),
 								layout.Rigid(layout.Spacer{Width: unit.Dp(12)}.Layout),
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-									l := material.Label(a.th, unit.Sp(18), "· "+al.Sound.Kind.String())
+									l := material.Label(a.th, unit.Sp(22), "· "+al.Sound.Kind.String())
 									l.Color = Mocha.Overlay1
 									return l.Layout(gtx)
 								}),
