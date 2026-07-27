@@ -33,12 +33,9 @@ func NewController() *Controller {
 	return &Controller{player: p, alarmSound: snd}
 }
 
-// Start rings an alarm: the alarm sound looped with a gentle fade-in. Spotify
-// alarms fall back to the alarm sound until Milestone 6.
+// Start rings the alarm tone: the alarm sound looped with a gentle fade-in.
+// (Spotify alarms play the tone first, then switch to music; see alarmRinger.)
 func (c *Controller) Start(a alarm.Alarm) {
-	if a.Sound.Kind == alarm.SoundSpotify {
-		log.Printf("audio: Spotify alarms arrive in M6; playing the alarm sound instead")
-	}
 	if !c.player.Enabled() || c.alarmSound == "" {
 		log.Printf("audio: alarm %s ringing (no audio backend)", a.TimeString())
 		return

@@ -6,6 +6,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"gioui.org/app"
@@ -71,7 +72,7 @@ func run(w *app.Window) error {
 	lib.Start()
 	defer lib.Stop()
 
-	ringer := &alarmRinger{audio: controller, spot: spot, device: deviceName}
+	ringer := &alarmRinger{audio: controller, spot: spot, lib: lib, device: deviceName}
 
 	application := ui.NewApp(ui.NewTheme(), store, ringer)
 	application.SetRadio(controller)
@@ -98,33 +99,82 @@ func run(w *app.Window) error {
 	}
 }
 
-// alarmRinger plays the right sound for a firing alarm: a Spotify context when
-// the alarm is configured for Spotify (falling back to the alarm tone on any
-// failure), otherwise the mpv-backed alarm tone. It satisfies ui.Ringer.
+// alarmRinger sounds a firing alarm. It always starts the mpv alarm tone
+// immediately so the alarm reliably wakes you; for a Spotify alarm it then
+// tries, in the background, to play the chosen playlist on the librespot
+// device — restarting librespot if the device has dropped off Spotify's list
+// while idle — and silences the tone once music is playing. It satisfies
+// ui.Ringer.
 type alarmRinger struct {
 	audio  *audio.Controller
 	spot   *spotify.Client
+	lib    *librespot.Supervisor
 	device string
+
+	mu     sync.Mutex
+	cancel context.CancelFunc
 }
 
 func (r *alarmRinger) Start(a alarm.Alarm) {
-	if a.Sound.Kind == alarm.SoundSpotify && a.Sound.Ref != "" && r.spot.Authorized() {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
-			if err := r.spot.PlayOnDevice(ctx, r.device, a.Sound.Ref, nil); err != nil {
-				log.Printf("spotify alarm failed (%v); falling back to alarm sound", err)
-				r.audio.Start(a)
-			}
-		}()
+	// Tone first — this always wakes you, even if Spotify is unreachable.
+	r.audio.Start(a)
+
+	if a.Sound.Kind != alarm.SoundSpotify || a.Sound.Ref == "" || r.spot == nil || !r.spot.Authorized() {
 		return
 	}
-	r.audio.Start(a)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	r.mu.Lock()
+	if r.cancel != nil {
+		r.cancel() // cancel any previous attempt
+	}
+	r.cancel = cancel
+	r.mu.Unlock()
+
+	go func() {
+		defer cancel()
+		ctx, tcancel := context.WithTimeout(ctx, 90*time.Second)
+		defer tcancel()
+
+		play := func() bool {
+			if err := r.spot.PlayOnDevice(ctx, r.device, a.Sound.Ref, nil); err != nil {
+				log.Printf("spotify alarm: play failed: %v", err)
+				return false
+			}
+			r.audio.Stop() // music is playing; silence the tone
+			return true
+		}
+
+		if play() {
+			return
+		}
+		// Device likely dropped off while idle overnight; restart librespot to
+		// re-register it, then poll until it reappears.
+		log.Printf("spotify alarm: device %q unavailable, restarting librespot", r.device)
+		r.lib.Restart()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
+			if _, ok, _ := r.spot.DeviceIDByName(ctx, r.device); ok && play() {
+				return
+			}
+		}
+	}()
 }
 
 func (r *alarmRinger) Stop() {
+	r.mu.Lock()
+	if r.cancel != nil {
+		r.cancel() // stop any in-flight Spotify attempt so music can't start after Stop
+		r.cancel = nil
+	}
+	r.mu.Unlock()
+
 	r.audio.Stop()
-	if r.spot.Authorized() {
+	if r.spot != nil && r.spot.Authorized() {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()

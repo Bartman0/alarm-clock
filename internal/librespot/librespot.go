@@ -98,6 +98,19 @@ func (s *Supervisor) loop() {
 	}
 }
 
+// Restart kills the current librespot process; the supervisor relaunches it
+// (after its backoff), forcing a fresh Spotify Connect registration. Used to
+// bring the device back when it has dropped off Spotify's device list while
+// idle.
+func (s *Supervisor) Restart() {
+	s.mu.Lock()
+	cmd := s.cmd
+	s.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+}
+
 // Stop terminates librespot and stops supervising.
 func (s *Supervisor) Stop() {
 	s.mu.Lock()
