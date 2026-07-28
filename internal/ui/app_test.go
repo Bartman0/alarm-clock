@@ -23,29 +23,46 @@ func newTestApp(al alarm.Alarm) (*App, *fakeRinger) {
 	return NewApp(NewTheme(), store, r), r
 }
 
-func TestTickFiresAtMatchingMinute(t *testing.T) {
+// test helpers mirroring the UI's mutex-guarded calls.
+func (a *App) testStop() {
+	a.mu.Lock()
+	a.stopRingingLocked()
+	a.mu.Unlock()
+}
+
+func (a *App) testSnooze(now time.Time) {
+	a.mu.Lock()
+	a.snoozeLocked(now)
+	a.mu.Unlock()
+}
+
+func (a *App) ringing() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ringingIdx >= 0
+}
+
+func TestFiresAtMatchingMinute(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 5, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
 
-	app.now = now
-	app.tick(now)
+	app.evaluate(now)
 
-	if app.cur != screenFiring {
-		t.Fatalf("cur = %v, want screenFiring", app.cur)
+	if !app.ringing() {
+		t.Fatal("expected the alarm to be ringing")
 	}
 	if r.started != 1 {
 		t.Fatalf("ringer started %d times, want 1", r.started)
 	}
 }
 
-func TestTickDoesNotRefireSameMinute(t *testing.T) {
+func TestDoesNotRefireSameMinute(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
 
-	app.now = now
-	app.tick(now)      // fires
-	app.stopRinging()  // user stops
-	app.tick(now.Add(10 * time.Second)) // still same minute
+	app.evaluate(now)                       // fires
+	app.testStop()                          // user stops
+	app.evaluate(now.Add(10 * time.Second)) // still same minute
 
 	if r.started != 1 {
 		t.Fatalf("ringer started %d times, want 1 (guarded within the minute)", r.started)
@@ -56,28 +73,23 @@ func TestSnoozeReArmsAfterFiveMinutes(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
 
-	app.now = now
-	app.tick(now) // fires
-	app.snooze()  // snooze from firing screen
+	app.evaluate(now)   // fires
+	app.testSnooze(now) // snooze from firing screen
 
-	if app.cur != screenHome {
-		t.Fatalf("after snooze cur = %v, want screenHome", app.cur)
+	if app.ringing() {
+		t.Fatal("after snooze the alarm should not be ringing")
 	}
 
 	// Not yet: 4 minutes later nothing happens.
-	early := now.Add(4 * time.Minute)
-	app.now = early
-	app.tick(early)
-	if app.cur == screenFiring {
+	app.evaluate(now.Add(4 * time.Minute))
+	if app.ringing() {
 		t.Fatal("alarm re-fired before the 5-minute snooze elapsed")
 	}
 
 	// After 5 minutes it rings again.
-	later := now.Add(5 * time.Minute)
-	app.now = later
-	app.tick(later)
-	if app.cur != screenFiring || r.started != 2 {
-		t.Fatalf("snooze did not re-fire: cur=%v started=%d", app.cur, r.started)
+	app.evaluate(now.Add(5 * time.Minute))
+	if !app.ringing() || r.started != 2 {
+		t.Fatalf("snooze did not re-fire: ringing=%v started=%d", app.ringing(), r.started)
 	}
 }
 
@@ -87,35 +99,31 @@ func TestSnoozeNotOverriddenLaterInSameMinute(t *testing.T) {
 	fire := time.Date(2026, 7, 22, 7, 0, 3, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
 
-	app.now = fire
-	app.tick(fire) // fires at 07:00:03
-
-	snoozeAt := time.Date(2026, 7, 22, 7, 0, 10, 0, time.UTC)
-	app.now = snoozeAt
-	app.snooze()
+	app.evaluate(fire) // fires at 07:00:03
+	app.testSnooze(time.Date(2026, 7, 22, 7, 0, 10, 0, time.UTC))
 
 	// Later in the SAME minute (07:00:40) the alarm must stay silent.
-	later := time.Date(2026, 7, 22, 7, 0, 40, 0, time.UTC)
-	app.now = later
-	app.tick(later)
+	app.evaluate(time.Date(2026, 7, 22, 7, 0, 40, 0, time.UTC))
 
-	if app.cur == screenFiring || r.started != 1 {
-		t.Fatalf("alarm re-fired within the same minute after snooze: cur=%v started=%d", app.cur, r.started)
+	if app.ringing() || r.started != 1 {
+		t.Fatalf("alarm re-fired within the same minute after snooze: ringing=%v started=%d", app.ringing(), r.started)
 	}
 }
 
-func TestOnceAlarmDisablesItselfAfterFiring(t *testing.T) {
+func TestOnceAlarmQueuesSelfDisableAfterFiring(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.Once})
 
-	app.now = now
-	app.tick(now)
+	app.evaluate(now)
 
-	if r.started != 1 || app.cur != screenFiring {
-		t.Fatalf("Once alarm did not fire: started=%d cur=%v", r.started, app.cur)
+	if r.started != 1 || !app.ringing() {
+		t.Fatalf("Once alarm did not fire: started=%d ringing=%v", r.started, app.ringing())
 	}
-	if app.store.Alarms[0].Enabled {
-		t.Fatal("Once alarm should disable itself after firing")
+	app.mu.Lock()
+	queued := app.disableOnce
+	app.mu.Unlock()
+	if queued != 0 {
+		t.Fatalf("Once alarm should be queued for self-disable (disableOnce=%d, want 0)", queued)
 	}
 }
 
@@ -123,11 +131,10 @@ func TestDisabledAlarmDoesNotFire(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: false, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
 
-	app.now = now
-	app.tick(now)
+	app.evaluate(now)
 
-	if r.started != 0 || app.cur != screenHome {
-		t.Fatalf("disabled alarm fired: started=%d cur=%v", r.started, app.cur)
+	if r.started != 0 || app.ringing() {
+		t.Fatalf("disabled alarm fired: started=%d ringing=%v", r.started, app.ringing())
 	}
 }
 
@@ -135,14 +142,10 @@ func TestAutoStopAfterMaxDuration(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
 
-	app.now = now
-	app.tick(now) // fires
+	app.evaluate(now) // fires
+	app.evaluate(now.Add(maxRingDuration + time.Second))
 
-	past := now.Add(maxRingDuration + time.Second)
-	app.now = past
-	app.tick(past)
-
-	if app.cur != screenHome || r.stopped == 0 {
-		t.Fatalf("alarm did not auto-stop: cur=%v stopped=%d", app.cur, r.stopped)
+	if app.ringing() || r.stopped == 0 {
+		t.Fatalf("alarm did not auto-stop: ringing=%v stopped=%d", app.ringing(), r.stopped)
 	}
 }

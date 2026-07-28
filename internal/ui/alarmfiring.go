@@ -16,10 +16,14 @@ import (
 // current time with Snooze (5 min) and Stop buttons.
 func (a *App) layoutFiring(gtx layout.Context) layout.Dimensions {
 	if a.btnSnooze.Clicked(gtx) {
-		a.snooze()
+		a.mu.Lock()
+		a.snoozeLocked(a.now)
+		a.mu.Unlock()
 	}
 	if a.btnStop.Clicked(gtx) {
-		a.stopRinging()
+		a.mu.Lock()
+		a.stopRingingLocked()
+		a.mu.Unlock()
 	}
 
 	Fill(gtx, Mocha.Base)

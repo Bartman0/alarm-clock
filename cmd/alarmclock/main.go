@@ -78,6 +78,7 @@ func run(w *app.Window) error {
 	application.SetRadio(controller)
 	application.SetSpotify(spot, deviceName)
 	application.SetInvalidate(w.Invalidate)
+	application.StartScheduler() // evaluate alarms independently of rendering
 
 	// Redraw once a second so the clock stays current and alarms are evaluated.
 	go func() {

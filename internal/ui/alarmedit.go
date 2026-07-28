@@ -77,7 +77,9 @@ func (a *App) handleEditEvents(gtx layout.Context) {
 	}
 	if a.editSave.Clicked(gtx) {
 		a.draft.Enabled = a.editEnable.Value
+		a.mu.Lock()
 		a.store.Alarms[a.editIdx] = a.draft
+		a.mu.Unlock()
 		a.rows[a.editIdx].toggle.Value = a.draft.Enabled
 		a.save()
 		a.cur = screenAlarms

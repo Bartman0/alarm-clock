@@ -78,7 +78,9 @@ func (a *App) layoutAlarmRow(gtx layout.Context, i int) layout.Dimensions {
 				sw.Color.Disabled = Mocha.Surface2
 				dims := sw.Layout(gtx)
 				if row.toggle.Value != a.store.Alarms[i].Enabled {
+					a.mu.Lock()
 					a.store.Alarms[i].Enabled = row.toggle.Value
+					a.mu.Unlock()
 					a.save()
 				}
 				return dims

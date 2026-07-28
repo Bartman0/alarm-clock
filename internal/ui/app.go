@@ -83,12 +83,17 @@ type App struct {
 	editSave   widget.Clickable
 	editCancel widget.Clickable
 
-	// Firing state.
+	// Firing state, evaluated by a background scheduler goroutine as well as
+	// the UI; guarded by mu. ringingIdx >= 0 means an alarm is ringing (the UI
+	// shows the firing screen regardless of cur). disableOnce is the index of a
+	// fired Eenmalig alarm the UI goroutine should disable, or -1.
+	mu          sync.Mutex
 	ringingIdx  int
 	ringStart   time.Time
 	snoozeUntil time.Time
 	snoozeIdx   int
 	lastFired   [alarm.Count]time.Time
+	disableOnce int
 	btnSnooze   widget.Clickable
 	btnStop     widget.Clickable
 
@@ -143,15 +148,16 @@ type alarmRow struct {
 // NewApp builds the app from a loaded store and a ringer.
 func NewApp(th *material.Theme, store *config.Store, ringer Ringer) *App {
 	a := &App{
-		th:         th,
-		store:      store,
-		ringer:     ringer,
-		cur:        screenHome,
-		editIdx:    -1,
-		ringingIdx: -1,
-		radioRows:  make([]widget.Clickable, maxRadioResults),
-		spotRows:   make([]widget.Clickable, maxSpotItems),
-		kbd:        newKeyboard(),
+		th:          th,
+		store:       store,
+		ringer:      ringer,
+		cur:         screenHome,
+		editIdx:     -1,
+		ringingIdx:  -1,
+		disableOnce: -1,
+		radioRows:   make([]widget.Clickable, maxRadioResults),
+		spotRows:    make([]widget.Clickable, maxSpotItems),
+		kbd:         newKeyboard(),
 	}
 	a.alarmsList.Axis = layout.Vertical
 	a.radioList.Axis = layout.Vertical
@@ -178,19 +184,36 @@ func (a *App) SetSpotify(c *spotify.Client, deviceName string) {
 // SetInvalidate sets the redraw callback used to refresh after async fetches.
 func (a *App) SetInvalidate(fn func()) { a.invalidate = fn }
 
-// Layout renders the current screen for the given wall-clock time.
+// Layout renders the current screen for the given wall-clock time. Alarm timing
+// is handled by the background scheduler (see StartScheduler), not here.
 func (a *App) Layout(gtx layout.Context, now time.Time) layout.Dimensions {
 	a.now = now
-	a.tick(now)
+
+	a.mu.Lock()
+	ringing := a.ringingIdx
+	once := a.disableOnce
+	a.disableOnce = -1
+	a.mu.Unlock()
+
+	// Apply a fired Eenmalig alarm's self-disable here, on the UI goroutine,
+	// which owns writes to the alarm store.
+	if once >= 0 {
+		a.mu.Lock()
+		a.store.Alarms[once].Enabled = false
+		a.mu.Unlock()
+		a.rows[once].toggle.Value = false
+		a.save()
+	}
 
 	Fill(gtx, Mocha.Base)
+	if ringing >= 0 { // an alarm is ringing: firing screen wins over cur
+		return a.layoutFiring(gtx)
+	}
 	switch a.cur {
 	case screenAlarms:
 		return a.layoutAlarms(gtx)
 	case screenEdit:
 		return a.layoutEdit(gtx)
-	case screenFiring:
-		return a.layoutFiring(gtx)
 	case screenRadio:
 		return a.layoutRadio(gtx)
 	case screenSpotify:
@@ -200,21 +223,46 @@ func (a *App) Layout(gtx layout.Context, now time.Time) layout.Dimensions {
 	}
 }
 
-// tick drives alarm firing, snooze wake-up and the ring time limit. It runs
-// every frame (the app invalidates once a second) at one-minute granularity.
-func (a *App) tick(now time.Time) {
+// StartScheduler runs alarm evaluation in its own goroutine, once a second, so
+// alarms fire even when the UI isn't rendering (e.g. the display has blanked
+// overnight, which stalls the Gio frame loop). Call once after SetInvalidate.
+func (a *App) StartScheduler() {
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for range t.C {
+			a.evaluate(time.Now())
+		}
+	}()
+}
+
+// evaluate runs one scheduler step and refreshes the UI if firing state changed.
+func (a *App) evaluate(now time.Time) {
+	a.mu.Lock()
+	changed := a.tickLocked(now)
+	a.mu.Unlock()
+	if changed && a.invalidate != nil {
+		a.invalidate()
+	}
+}
+
+// tickLocked drives alarm firing, snooze wake-up and the ring time limit at
+// one-minute granularity. The caller must hold a.mu. It returns whether firing
+// state changed.
+func (a *App) tickLocked(now time.Time) bool {
 	if a.ringingIdx >= 0 {
 		if now.Sub(a.ringStart) >= maxRingDuration {
-			a.stopRinging()
+			a.stopRingingLocked()
+			return true
 		}
-		return
+		return false
 	}
 
 	// Wake from snooze.
 	if !a.snoozeUntil.IsZero() && !now.Before(a.snoozeUntil) {
 		a.snoozeUntil = time.Time{}
-		a.startRinging(a.snoozeIdx, now)
-		return
+		a.startRingingLocked(a.snoozeIdx, now)
+		return true
 	}
 
 	// Fire a scheduled alarm.
@@ -223,21 +271,20 @@ func (a *App) tick(now time.Time) {
 		if !al.Enabled || !al.Rhythm.Active(now.Weekday()) {
 			continue
 		}
-		// Fire at most once per clock-minute: skip if we already fired during
-		// the current minute (guards against snooze being overridden by a
-		// second same-minute trigger).
+		// Fire at most once per clock-minute (guards snooze against a second
+		// same-minute trigger).
 		if al.Hour == now.Hour() && al.Minute == now.Minute() && !sameMinute(a.lastFired[i], now) {
 			a.lastFired[i] = now
-			// A one-time (Eenmalig) alarm disables itself after firing.
+			// A one-time (Eenmalig) alarm disables itself after firing; the UI
+			// goroutine applies the store write (see Layout).
 			if al.Rhythm == alarm.Once {
-				a.store.Alarms[i].Enabled = false
-				a.rows[i].toggle.Value = false
-				a.save()
+				a.disableOnce = i
 			}
-			a.startRinging(i, now)
-			return
+			a.startRingingLocked(i, now)
+			return true
 		}
 	}
+	return false
 }
 
 // sameMinute reports whether two times fall in the same minute-of-day.
@@ -245,31 +292,30 @@ func sameMinute(a, b time.Time) bool {
 	return a.Truncate(time.Minute).Equal(b.Truncate(time.Minute))
 }
 
-func (a *App) startRinging(i int, now time.Time) {
+// startRingingLocked, stopRingingLocked and snoozeLocked mutate firing state and
+// drive the ringer; the caller must hold a.mu.
+func (a *App) startRingingLocked(i int, now time.Time) {
 	a.ringingIdx = i
 	a.ringStart = now
-	a.cur = screenFiring
 	a.ringer.Start(a.store.Alarms[i])
 }
 
-func (a *App) stopRinging() {
+func (a *App) stopRingingLocked() {
 	if a.ringingIdx >= 0 {
 		a.ringer.Stop()
 	}
 	a.ringingIdx = -1
 	a.snoozeUntil = time.Time{}
-	a.cur = screenHome
 }
 
-func (a *App) snooze() {
+func (a *App) snoozeLocked(now time.Time) {
 	if a.ringingIdx < 0 {
 		return
 	}
 	a.ringer.Stop()
 	a.snoozeIdx = a.ringingIdx
-	a.snoozeUntil = a.now.Add(snoozeDuration)
+	a.snoozeUntil = now.Add(snoozeDuration)
 	a.ringingIdx = -1
-	a.cur = screenHome
 }
 
 func (a *App) save() {
