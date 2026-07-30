@@ -31,6 +31,9 @@ func (a *App) layoutHome(gtx layout.Context) layout.Dimensions {
 	if a.btnSpotify.Clicked(gtx) {
 		a.openSpotify()
 	}
+	if a.btnStopAll.Clicked(gtx) {
+		a.stopAll()
+	}
 
 	// Master volume: seed the slider from the system once, then push changes
 	// (throttled to whole-percent steps) to the PipeWire sink.
@@ -70,10 +73,11 @@ func (a *App) layoutHome(gtx layout.Context) layout.Dimensions {
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Inset{Top: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-						// Equal-weight spacers on both sides keep Radio/Spotify
-						// centred on screen; the alarm button right-aligns in
-						// the right spacer.
-						layout.Flexed(1, flexSpacer),
+						// Stop on the left, alarm access on the right, keeping
+						// Radio/Spotify centred between the equal-weight sides.
+						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+							return layout.W.Layout(gtx, a.stopButton)
+						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return actionButton(gtx, a.th, &a.btnRadio, "Radio", Mocha.Blue)
 						}),
@@ -89,6 +93,18 @@ func (a *App) layoutHome(gtx layout.Context) layout.Dimensions {
 			}),
 		)
 	})
+}
+
+// stopButton silences any playing audio (alarm, radio, Spotify). Subdued so it
+// doesn't shout when idle, but red to read as a stop. Sits bottom-left.
+func (a *App) stopButton(gtx layout.Context) layout.Dimensions {
+	b := material.Button(a.th, &a.btnStopAll, "Stop")
+	b.Background = Mocha.Surface0
+	b.Color = Mocha.Red
+	b.TextSize = unit.Sp(22)
+	b.CornerRadius = unit.Dp(16)
+	b.Inset = layout.Inset{Top: unit.Dp(18), Bottom: unit.Dp(18), Left: unit.Dp(24), Right: unit.Dp(24)}
+	return b.Layout(gtx)
 }
 
 // alarmAccessButton shows the next-alarm summary as a subdued button that opens

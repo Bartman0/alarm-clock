@@ -127,6 +127,31 @@ func TestOnceAlarmQueuesSelfDisableAfterFiring(t *testing.T) {
 	}
 }
 
+type fakeRadio struct{ stopped int }
+
+func (f *fakeRadio) PlayStream(string) {}
+func (f *fakeRadio) StopStream()       { f.stopped++ }
+
+func TestStopAllSilencesEverything(t *testing.T) {
+	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
+	radio := &fakeRadio{}
+	app.SetRadio(radio)
+
+	app.evaluate(now) // ringing
+	app.stopAll()
+
+	if app.ringing() {
+		t.Fatal("stopAll should clear ringing state")
+	}
+	if r.stopped == 0 {
+		t.Fatal("stopAll should stop the alarm ringer")
+	}
+	if radio.stopped == 0 {
+		t.Fatal("stopAll should stop the radio")
+	}
+}
+
 func TestDisabledAlarmDoesNotFire(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: false, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})

@@ -59,6 +59,7 @@ type App struct {
 	btnAlarms  widget.Clickable
 	btnRadio   widget.Clickable
 	btnSpotify widget.Clickable
+	btnStopAll widget.Clickable
 
 	// Master volume slider (drives the PipeWire default sink).
 	volume     widget.Float
@@ -306,6 +307,23 @@ func (a *App) stopRingingLocked() {
 	}
 	a.ringingIdx = -1
 	a.snoozeUntil = time.Time{}
+}
+
+// stopAll silences everything from the home screen: it clears any ringing /
+// pending-snooze state and stops the alarm tone + Spotify (via the ringer),
+// the radio, and any interactive Spotify playback. Safe to call when nothing
+// is playing.
+func (a *App) stopAll() {
+	a.mu.Lock()
+	a.ringingIdx = -1
+	a.snoozeUntil = time.Time{}
+	a.mu.Unlock()
+
+	a.ringer.Stop() // alarm tone + Spotify pause + cancel any in-flight attempt
+	if a.radio != nil {
+		a.radio.StopStream()
+	}
+	a.nowPlaying = ""
 }
 
 func (a *App) snoozeLocked(now time.Time) {
