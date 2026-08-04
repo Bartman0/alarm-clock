@@ -137,6 +137,17 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 		ctx, tcancel := context.WithTimeout(ctx, 90*time.Second)
 		defer tcancel()
 
+		// If the alarm is dismissed while this goroutine is starting playback,
+		// pause here on the way out. This runs after our own Play, so it wins
+		// the race against Stop's pause (which may land before Play does).
+		defer func() {
+			if ctx.Err() == context.Canceled {
+				pctx, pcancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer pcancel()
+				_ = r.spot.Pause(pctx)
+			}
+		}()
+
 		play := func() bool {
 			id, ok, err := r.spot.DeviceIDByName(ctx, r.device)
 			if err != nil || !ok {
