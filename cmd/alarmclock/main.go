@@ -138,11 +138,16 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 		defer tcancel()
 
 		play := func() bool {
-			if err := r.spot.PlayOnDevice(ctx, r.device, a.Sound.Ref, nil); err != nil {
+			id, ok, err := r.spot.DeviceIDByName(ctx, r.device)
+			if err != nil || !ok {
+				return false
+			}
+			if err := r.spot.Play(ctx, id, a.Sound.Ref, nil); err != nil {
 				log.Printf("spotify alarm: play failed: %v", err)
 				return false
 			}
-			r.audio.Stop() // music is playing; silence the tone
+			// Playback started; randomize the start and hand over from the tone.
+			r.randomizeStart(ctx, id)
 			return true
 		}
 
@@ -164,6 +169,34 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 			}
 		}
 	}()
+}
+
+// randomizeStart enables shuffle and skips off the deterministic first track of
+// a just-started playlist, so the alarm doesn't always start on the same song.
+// The alarm tone keeps playing to mask the brief first-track blip; then it's
+// silenced. Bails out early if the alarm is dismissed (ctx cancelled).
+func (r *alarmRinger) randomizeStart(ctx context.Context, deviceID string) {
+	if !sleepCtx(ctx, 800*time.Millisecond) { // let playback register
+		return
+	}
+	if err := r.spot.Shuffle(ctx, deviceID, true); err != nil {
+		log.Printf("spotify alarm: shuffle failed: %v", err)
+	}
+	if err := r.spot.Next(ctx, deviceID); err != nil {
+		log.Printf("spotify alarm: next failed: %v", err)
+	}
+	sleepCtx(ctx, 400*time.Millisecond) // let the skip land
+	r.audio.Stop()                      // random track is playing; silence the tone
+}
+
+// sleepCtx sleeps for d, returning false if ctx is cancelled first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
 }
 
 func (r *alarmRinger) Stop() {
