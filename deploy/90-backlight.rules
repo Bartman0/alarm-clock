@@ -1,0 +1,4 @@
+# Let the video group change display brightness, so the kiosk user can dim the
+# screen when idle (swayidle) without root. The brightness sysfs file is
+# otherwise root-only.
+SUBSYSTEM=="backlight", ACTION=="add", RUN+="/bin/sh -c 'chgrp video /sys/class/backlight/%k/brightness && chmod g+w /sys/class/backlight/%k/brightness'"

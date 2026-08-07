@@ -13,4 +13,9 @@ default_floating_border none
 # The app is a native Wayland client; no Xwayland needed.
 xwayland disable
 
+# Dim the backlight to 50% after 2 minutes of no touch; restore on any touch.
+# (Only the backlight is dimmed — the output stays on so the clock keeps
+# updating and alarms are unaffected.)
+exec swayidle -w timeout 120 '/etc/alarmclock/backlight.sh 50' resume '/etc/alarmclock/backlight.sh 100'
+
 exec /usr/local/bin/alarmclock

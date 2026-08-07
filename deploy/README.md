@@ -122,3 +122,10 @@ the app fullscreen. To update: `git pull && ./deploy/install.sh && sudo reboot`.
   `~/.cache/alarmclock/alarm.wav`.
 - **Spotify "device not found"**: activate the "Wekker" device once from the
   Spotify phone app; confirm librespot is running (`pgrep librespot`).
+- **Screen doesn't dim / stay-dim after 2 min idle**: `swayidle` dims the
+  backlight to 50% and restores it on touch. It needs a writable backlight and
+  the `video`-group udev rule (installed to `/etc/udev/rules.d/90-backlight.rules`).
+  Confirm a device exists: `ls /sys/class/backlight/` (empty means the panel
+  exposes no sysfs backlight — dimming isn't possible that way). Test manually:
+  `/etc/alarmclock/backlight.sh 50` then `100`. Only the backlight dims; the
+  output stays on so the clock keeps updating and alarms still fire.

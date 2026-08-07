@@ -23,7 +23,7 @@ if [ "${SKIP_APT:-0}" != "1" ] && command -v apt-get >/dev/null 2>&1; then
 		libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
 		libx11-dev libx11-xcb-dev \
 		libegl1-mesa-dev libgles2-mesa-dev libffi-dev libxcursor-dev libvulkan-dev \
-		sway mpv libasound2-dev \
+		sway swayidle mpv libasound2-dev \
 		pipewire-alsa rtkit
 fi
 
@@ -32,10 +32,16 @@ fi
 echo "==> Building alarmclock…"
 go build -tags novulkan -o alarmclock ./cmd/alarmclock
 
-# 3. Install the binary and the sway kiosk config.
+# 3. Install the binary, the sway kiosk config and the backlight dimmer.
 echo "==> Installing binary and sway config…"
 sudo install -Dm755 alarmclock "$PREFIX/bin/alarmclock"
 sudo install -Dm644 deploy/sway/config /etc/alarmclock/sway.config
+
+echo "==> Installing backlight dimming (swayidle)…"
+sudo install -Dm755 deploy/backlight.sh /etc/alarmclock/backlight.sh
+sudo install -Dm644 deploy/90-backlight.rules /etc/udev/rules.d/90-backlight.rules
+sudo udevadm control --reload-rules || true
+sudo udevadm trigger --subsystem-match=backlight || true
 
 # 4. Remove any previous systemd kiosk service (superseded by console autostart).
 if [ -f /etc/systemd/system/alarmclock.service ]; then
