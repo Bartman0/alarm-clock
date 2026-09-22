@@ -66,7 +66,7 @@ compositor (`sudo apt install -y sway`). The service launches
 output DSI-2 transform 270
 default_border none
 xwayland disable
-exec /usr/local/bin/alarmclock
+exec /etc/alarmclock/run-alarmclock.sh
 ```
 
 This rotates the display to landscape and keeps pointer/touch input aligned.
@@ -97,6 +97,58 @@ sudo reboot
 On boot the Pi autologins on tty1, and `~/.profile` `exec`s
 `sway -c /etc/alarmclock/sway.config`, which rotates the display and launches
 the app fullscreen. To update: `git pull && ./deploy/install.sh && sudo reboot`.
+
+## Diagnosing a missed alarm
+
+The app is launched by `run-alarmclock.sh`, which keeps it running if it
+crashes and appends everything it prints to `~/.cache/alarmclock/app.log`
+(rotated to `app.log.1` past 10 MB). Without this the log went to sway's stderr
+on the tty1 console the kiosk covers, so a missed alarm left no trace at all.
+
+```sh
+tail -f ~/.cache/alarmclock/app.log             # watch live
+grep -E "MISSED|STALLED|STEPPED|supervisor" ~/.cache/alarmclock/app.log
+```
+
+What the lines mean:
+
+- `heartbeat: <time> idle next[0=Tue 07:00 …]` — written once a minute. It is
+  proof the scheduler is alive and shows the time it believes it is and what it
+  is waiting for. **A gap in these lines is the process stalled or dead**; a
+  jump in them is the clock being stepped.
+- `alarm N: firing occurrence <time> (Xs late) …` — the alarm rang. If you did
+  not hear it, the fault is downstream of the scheduler: the sink, mpv or
+  librespot.
+- `alarm N: MISSED occurrence <time> — noticed X late` — the scheduler never
+  observed the alarm's window. The `STALLED` / `STEPPED` line just before it
+  says which happened.
+- `scheduler: STALLED for X between ticks` — the process was frozen. Both
+  clocks agree, so real time genuinely passed unobserved.
+- `scheduler: WALL CLOCK STEPPED by X` — the wall clock jumped while little
+  real time passed, i.e. NTP corrected it. The Pi 5's RTC needs a battery, so
+  after a reboot without one the clock is wrong until `systemd-timesyncd`
+  steps it — and any alarm in the skipped span never happened as far as the
+  app was concerned.
+- `alarm N: switched OFF on the alarms list` — someone (or a stray touch)
+  turned that alarm off. It is the one way an alarm silences itself without
+  the editor being opened.
+- `supervisor: alarmclock exited with status N` — the app crashed and was
+  restarted. Before the supervisor existed, this left the kiosk dead until the
+  next reboot.
+
+Scheduled alarms are level-triggered within a two-minute grace window, so a
+stall or a clock step across the alarm minute no longer loses the alarm — it
+still rings, logged with how late it was. Past that window it is recorded as
+`MISSED` rather than rung at an hour you did not ask for.
+
+Worth checking alongside the log:
+
+```sh
+timedatectl                                  # timezone and NTP sync state
+journalctl -u systemd-timesyncd | grep -i step
+wpctl get-volume @DEFAULT_AUDIO_SINK@        # "[MUTED]" means silence, whatever else works
+pgrep -a mpv librespot alarmclock
+```
 
 ## Troubleshooting
 

@@ -18,4 +18,7 @@ xwayland disable
 # updating and alarms are unaffected.)
 exec swayidle -w timeout 120 '/etc/alarmclock/backlight.sh 10' resume '/etc/alarmclock/backlight.sh 50'
 
-exec /usr/local/bin/alarmclock
+# Launched through the supervisor, not directly: it keeps the app running if it
+# crashes and puts its log on disk at ~/.cache/alarmclock/app.log. sway's own
+# output goes to the tty1 console the kiosk covers, where nothing can read it.
+exec /etc/alarmclock/run-alarmclock.sh

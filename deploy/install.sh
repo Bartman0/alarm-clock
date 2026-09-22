@@ -33,8 +33,9 @@ echo "==> Building alarmclock…"
 go build -tags novulkan -o alarmclock ./cmd/alarmclock
 
 # 3. Install the binary, the sway kiosk config and the backlight dimmer.
-echo "==> Installing binary and sway config…"
+echo "==> Installing binary, supervisor and sway config…"
 sudo install -Dm755 alarmclock "$PREFIX/bin/alarmclock"
+sudo install -Dm755 deploy/run-alarmclock.sh /etc/alarmclock/run-alarmclock.sh
 sudo install -Dm644 deploy/sway/config /etc/alarmclock/sway.config
 
 echo "==> Installing backlight dimming (swayidle)…"
