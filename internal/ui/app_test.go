@@ -1,6 +1,10 @@
 package ui
 
 import (
+	"bytes"
+	"log"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,19 +25,6 @@ func newTestApp(al alarm.Alarm) (*App, *fakeRinger) {
 	store.Alarms[0] = al
 	r := &fakeRinger{}
 	return NewApp(NewTheme(), store, r), r
-}
-
-// test helpers mirroring the UI's mutex-guarded calls.
-func (a *App) testStop() {
-	a.mu.Lock()
-	a.stopRingingLocked()
-	a.mu.Unlock()
-}
-
-func (a *App) testSnooze(now time.Time) {
-	a.mu.Lock()
-	a.snoozeLocked(now)
-	a.mu.Unlock()
 }
 
 func (a *App) ringing() bool {
@@ -61,7 +52,7 @@ func TestDoesNotRefireSameMinute(t *testing.T) {
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
 
 	app.evaluate(now)                       // fires
-	app.testStop()                          // user stops
+	app.stopRinging()                       // user stops
 	app.evaluate(now.Add(10 * time.Second)) // still same minute
 
 	if r.started != 1 {
@@ -73,8 +64,8 @@ func TestSnoozeReArmsAfterFiveMinutes(t *testing.T) {
 	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
 
-	app.evaluate(now)   // fires
-	app.testSnooze(now) // snooze from firing screen
+	app.evaluate(now) // fires
+	app.snooze(now)   // snooze from firing screen
 
 	if app.ringing() {
 		t.Fatal("after snooze the alarm should not be ringing")
@@ -100,7 +91,7 @@ func TestSnoozeNotOverriddenLaterInSameMinute(t *testing.T) {
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
 
 	app.evaluate(fire) // fires at 07:00:03
-	app.testSnooze(time.Date(2026, 7, 22, 7, 0, 10, 0, time.UTC))
+	app.snooze(time.Date(2026, 7, 22, 7, 0, 10, 0, time.UTC))
 
 	// Later in the SAME minute (07:00:40) the alarm must stay silent.
 	app.evaluate(time.Date(2026, 7, 22, 7, 0, 40, 0, time.UTC))
@@ -172,5 +163,149 @@ func TestAutoStopAfterMaxDuration(t *testing.T) {
 
 	if app.ringing() || r.stopped == 0 {
 		t.Fatalf("alarm did not auto-stop: ringing=%v stopped=%d", app.ringing(), r.stopped)
+	}
+}
+
+// Regression for the missed-alarm bug: firing used to require a tick to land
+// inside the alarm's exact clock-minute. A scheduler stall or an NTP step over
+// that minute lost the alarm silently. Firing is now level-triggered within
+// fireGrace, so a tick arriving late still rings it.
+func TestFiresWhenTheExactMinuteIsSkipped(t *testing.T) {
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
+
+	// First tick well before the alarm, then nothing until after 07:00 has
+	// passed entirely — as happens when the clock steps forward.
+	app.evaluate(time.Date(2026, 7, 22, 6, 58, 0, 0, time.UTC))
+	app.evaluate(time.Date(2026, 7, 22, 7, 1, 30, 0, time.UTC))
+
+	if !app.ringing() || r.started != 1 {
+		t.Fatalf("alarm lost when its exact minute was skipped: ringing=%v started=%d", app.ringing(), r.started)
+	}
+}
+
+// Past the grace window the alarm is not rung hours late; it is recorded as
+// missed and does not fire when a later tick arrives.
+func TestDoesNotFireLongAfterTheGraceWindow(t *testing.T) {
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.evaluate(time.Date(2026, 7, 22, 6, 58, 0, 0, time.UTC))
+	app.evaluate(time.Date(2026, 7, 22, 9, 30, 0, 0, time.UTC)) // 2.5h late
+
+	if app.ringing() || r.started != 0 {
+		t.Fatalf("alarm rang far outside its window: ringing=%v started=%d", app.ringing(), r.started)
+	}
+}
+
+// Starting the app long after an alarm's time must not fire it retroactively.
+func TestStartupDoesNotFirePastOccurrences(t *testing.T) {
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.evaluate(time.Date(2026, 7, 22, 15, 0, 0, 0, time.UTC)) // first ever tick
+
+	if app.ringing() || r.started != 0 {
+		t.Fatalf("a long-past alarm fired at startup: ringing=%v started=%d", app.ringing(), r.started)
+	}
+}
+
+// An alarm due moments before startup should still ring: the grace window
+// applies to the seed too.
+func TestStartupFiresAnAlarmDueWithinGrace(t *testing.T) {
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.evaluate(time.Date(2026, 7, 22, 7, 0, 30, 0, time.UTC)) // first ever tick
+
+	if !app.ringing() || r.started != 1 {
+		t.Fatalf("alarm due 30s ago did not ring at startup: ringing=%v started=%d", app.ringing(), r.started)
+	}
+}
+
+// The next day's occurrence is a distinct one, so a daily alarm keeps firing.
+func TestFiresAgainTheNextDay(t *testing.T) {
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.evaluate(time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC))
+	app.stopRinging()
+	app.evaluate(time.Date(2026, 7, 23, 7, 0, 0, 0, time.UTC))
+
+	if !app.ringing() || r.started != 2 {
+		t.Fatalf("daily alarm did not fire the next day: ringing=%v started=%d", app.ringing(), r.started)
+	}
+}
+
+// A Workweek alarm must stay silent on the weekend even inside its window.
+func TestRhythmStillGatesFiring(t *testing.T) {
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.Workweek})
+
+	app.evaluate(time.Date(2026, 7, 25, 7, 0, 10, 0, time.UTC)) // Saturday
+
+	if app.ringing() || r.started != 0 {
+		t.Fatalf("Workweek alarm fired on a Saturday: ringing=%v started=%d", app.ringing(), r.started)
+	}
+}
+
+// captureLog collects what fn writes to the standard logger.
+func captureLog(fn func()) string {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	fn()
+	return buf.String()
+}
+
+// A forward NTP step is the failure we cannot see in the monotonic clock, so
+// it must be reported from the divergence between the two gaps. (The Pi has no
+// battery-backed RTC, so timesyncd steps the clock after a reboot.)
+func TestLogsWallClockStep(t *testing.T) {
+	out := captureLog(func() {
+		logTimeAnomaly(time.Second, time.Hour) // 1s really elapsed, clock jumped an hour
+	})
+	if !strings.Contains(out, "WALL CLOCK STEPPED") {
+		t.Fatalf("forward clock step not reported, got: %q", out)
+	}
+}
+
+func TestLogsBackwardWallClockStep(t *testing.T) {
+	out := captureLog(func() {
+		logTimeAnomaly(time.Second, -30*time.Minute)
+	})
+	if !strings.Contains(out, "WALL CLOCK STEPPED") {
+		t.Fatalf("backward clock step not reported, got: %q", out)
+	}
+}
+
+func TestLogsSchedulerStall(t *testing.T) {
+	out := captureLog(func() {
+		logTimeAnomaly(90*time.Second, 90*time.Second) // both clocks agree: a real stall
+	})
+	if !strings.Contains(out, "STALLED") {
+		t.Fatalf("scheduler stall not reported, got: %q", out)
+	}
+	if strings.Contains(out, "WALL CLOCK STEPPED") {
+		t.Fatalf("a stall must not be reported as a clock step, got: %q", out)
+	}
+}
+
+func TestOrdinaryTickIsSilent(t *testing.T) {
+	out := captureLog(func() {
+		logTimeAnomaly(time.Second, time.Second+3*time.Millisecond)
+	})
+	if out != "" {
+		t.Fatalf("a normal tick should log nothing, got: %q", out)
+	}
+}
+
+// A missed occurrence is the signature we need in the log to diagnose the next
+// failure, so assert the line is actually written.
+func TestLogsMissedOccurrence(t *testing.T) {
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
+	out := captureLog(func() {
+		app.evaluate(time.Date(2026, 7, 22, 6, 59, 0, 0, time.UTC))
+		app.evaluate(time.Date(2026, 7, 22, 10, 15, 0, 0, time.UTC))
+	})
+	if !strings.Contains(out, "MISSED occurrence") {
+		t.Fatalf("missed occurrence not reported, got: %q", out)
+	}
+	if r.started != 0 {
+		t.Fatalf("a missed occurrence must not ring: started=%d", r.started)
 	}
 }

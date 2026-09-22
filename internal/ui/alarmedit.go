@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"log"
 
 	"gioui.org/layout"
 	"gioui.org/text"
@@ -17,7 +18,7 @@ var spacer12 = layout.Rigid(layout.Spacer{Width: unit.Dp(12)}.Layout)
 // beginEdit loads alarm i into the draft and opens the editor.
 func (a *App) beginEdit(i int) {
 	a.editIdx = i
-	a.draft = a.store.Alarms[i]
+	a.draft = a.alarmAt(i)
 	a.editEnable.Value = a.draft.Enabled
 	a.cur = screenEdit
 }
@@ -77,9 +78,9 @@ func (a *App) handleEditEvents(gtx layout.Context) {
 	}
 	if a.editSave.Clicked(gtx) {
 		a.draft.Enabled = a.editEnable.Value
-		a.mu.Lock()
-		a.store.Alarms[a.editIdx] = a.draft
-		a.mu.Unlock()
+		log.Printf("alarm %d: saved %s %s %s (%s)", a.editIdx, a.draft.TimeString(),
+			a.draft.Rhythm, a.draft.Sound.Kind, onOff(a.draft.Enabled))
+		a.setAlarm(a.editIdx, a.draft)
 		a.rows[a.editIdx].toggle.Value = a.draft.Enabled
 		a.save()
 		a.cur = screenAlarms

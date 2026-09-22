@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"log"
+
 	"gioui.org/layout"
 	"gioui.org/unit"
 	"gioui.org/widget/material"
@@ -36,7 +38,7 @@ func (a *App) layoutAlarms(gtx layout.Context) layout.Dimensions {
 }
 
 func (a *App) layoutAlarmRow(gtx layout.Context, i int) layout.Dimensions {
-	al := a.store.Alarms[i]
+	al := a.alarmAt(i)
 	row := &a.rows[i]
 
 	return widgetCard(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -77,10 +79,12 @@ func (a *App) layoutAlarmRow(gtx layout.Context, i int) layout.Dimensions {
 				sw.Color.Enabled = Mocha.Green
 				sw.Color.Disabled = Mocha.Surface2
 				dims := sw.Layout(gtx)
-				if row.toggle.Value != a.store.Alarms[i].Enabled {
-					a.mu.Lock()
-					a.store.Alarms[i].Enabled = row.toggle.Value
-					a.mu.Unlock()
+				if row.toggle.Value != al.Enabled {
+					// Logged because this is the one way an alarm turns itself
+					// off without you opening the editor — a stray touch here
+					// silences it for good, with nothing else to show for it.
+					log.Printf("alarm %d: switched %s on the alarms list", i, onOff(row.toggle.Value))
+					a.setAlarmEnabled(i, row.toggle.Value)
 					a.save()
 				}
 				return dims
@@ -94,4 +98,12 @@ func widgetCard(gtx layout.Context, w layout.Widget) layout.Dimensions {
 	return roundedPanel(gtx, Mocha.Surface0, unit.Dp(14), func(gtx layout.Context) layout.Dimensions {
 		return layout.Inset{Top: unit.Dp(10), Bottom: unit.Dp(10), Left: unit.Dp(18), Right: unit.Dp(18)}.Layout(gtx, w)
 	})
+}
+
+// onOff labels an enabled flag for the log.
+func onOff(on bool) string {
+	if on {
+		return "ON"
+	}
+	return "OFF"
 }
