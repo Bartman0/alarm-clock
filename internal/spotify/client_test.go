@@ -104,3 +104,60 @@ func validClient(apiURL string) *Client {
 	c.api = apiURL
 	return c
 }
+
+func TestPlaybackStateReportsProgress(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/me/player" {
+			t.Errorf("path = %q, want /me/player", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"is_playing":true,"progress_ms":4321,"device":{"id":"D1","name":"Wekker","is_active":true}}`))
+	}))
+	defer api.Close()
+
+	c := New(Config{ClientID: "cid"}, Tokens{AccessToken: "A", Expiry: time.Now().Add(time.Hour)}, nil)
+	c.api = api.URL
+
+	st, ok, err := c.PlaybackState(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("PlaybackState: ok=%v err=%v", ok, err)
+	}
+	if !st.IsPlaying || st.ProgressMS != 4321 || st.Device.ID != "D1" {
+		t.Fatalf("got %+v", st)
+	}
+}
+
+// Spotify answers 204 with an empty body when nothing is playing anywhere.
+// That is an answer, not a failure — and it is the state the alarm must be
+// able to tell apart from "playing", since it decides whether the tone stops.
+func TestPlaybackStateHandlesNoContent(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer api.Close()
+
+	c := New(Config{ClientID: "cid"}, Tokens{AccessToken: "A", Expiry: time.Now().Add(time.Hour)}, nil)
+	c.api = api.URL
+
+	st, ok, err := c.PlaybackState(context.Background())
+	if err != nil {
+		t.Fatalf("204 should not be an error: %v", err)
+	}
+	if ok || st.IsPlaying {
+		t.Fatalf("204 should report nothing playing, got ok=%v %+v", ok, st)
+	}
+}
+
+// Endpoints that must return data still treat an empty response as an error.
+func TestApiGetTreatsNoContentAsError(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer api.Close()
+
+	c := New(Config{ClientID: "cid"}, Tokens{AccessToken: "A", Expiry: time.Now().Add(time.Hour)}, nil)
+	c.api = api.URL
+
+	if _, err := c.Devices(context.Background()); err == nil {
+		t.Fatal("Devices should fail when the API returns no content")
+	}
+}

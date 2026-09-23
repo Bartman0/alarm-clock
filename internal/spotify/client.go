@@ -145,26 +145,45 @@ func (c *Client) tokenRequest(ctx context.Context, form url.Values) (Tokens, err
 	}, nil
 }
 
-// apiGet performs an authorized GET and decodes JSON into out.
+// apiGet performs an authorized GET and decodes JSON into out. An endpoint
+// answering "no content" is an error here; use apiGetOptional where that is a
+// legitimate answer.
 func (c *Client) apiGet(ctx context.Context, path string, out any) error {
-	tok, err := c.accessToken(ctx)
+	found, err := c.apiGetOptional(ctx, path, out)
 	if err != nil {
 		return err
 	}
+	if !found {
+		return fmt.Errorf("spotify GET %s: no content", path)
+	}
+	return nil
+}
+
+// apiGetOptional is apiGet for endpoints that answer 204 with an empty body
+// when there is nothing to report — /me/player does this whenever playback is
+// idle. found is false in that case, and it is not an error.
+func (c *Client) apiGetOptional(ctx context.Context, path string, out any) (found bool, err error) {
+	tok, err := c.accessToken(ctx)
+	if err != nil {
+		return false, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.api+path, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("spotify GET %s: %s: %s", path, resp.Status, errBody(resp))
+	if resp.StatusCode == http.StatusNoContent {
+		return false, nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("spotify GET %s: %s: %s", path, resp.Status, errBody(resp))
+	}
+	return true, json.NewDecoder(resp.Body).Decode(out)
 }
 
 // errBody reads a short prefix of an error response body for diagnostics.

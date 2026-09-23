@@ -24,6 +24,16 @@ import (
 // deviceName is how the Pi advertises itself as a Spotify Connect device.
 const deviceName = "Wekker"
 
+const (
+	// playbackConfirm is how long we wait for the Connect device to really
+	// start rendering audio, and playbackPoll how often we check. Spotify
+	// accepting a Play command proves nothing: librespot still has to take
+	// over playback, and player commands issued before it does come back
+	// "Restriction violated".
+	playbackConfirm = 20 * time.Second
+	playbackPoll    = time.Second
+)
+
 func main() {
 	go func() {
 		w := new(app.Window)
@@ -157,7 +167,13 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 				log.Printf("spotify alarm: play failed: %v", err)
 				return false
 			}
-			// Playback started; randomize the start and hand over from the tone.
+			// Accepting Play is not the same as making a sound. Wait for the
+			// device to actually be playing before issuing player commands or
+			// touching the tone.
+			if !r.playbackConfirmed(ctx, id, playbackConfirm) {
+				log.Printf("spotify alarm: %q accepted Play but never started playing", r.device)
+				return false
+			}
 			r.randomizeStart(ctx, id)
 			return true
 		}
@@ -184,20 +200,53 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 
 // randomizeStart enables shuffle and skips off the deterministic first track of
 // a just-started playlist, so the alarm doesn't always start on the same song.
-// The alarm tone keeps playing to mask the brief first-track blip; then it's
-// silenced. Bails out early if the alarm is dismissed (ctx cancelled).
+// The alarm tone keeps playing to mask the brief first-track blip, and is
+// silenced only once music is confirmed to be playing again after the skip.
+// Bails out early if the alarm is dismissed (ctx cancelled).
 func (r *alarmRinger) randomizeStart(ctx context.Context, deviceID string) {
-	if !sleepCtx(ctx, 800*time.Millisecond) { // let playback register
-		return
-	}
 	if err := r.spot.Shuffle(ctx, deviceID, true); err != nil {
 		log.Printf("spotify alarm: shuffle failed: %v", err)
 	}
 	if err := r.spot.Next(ctx, deviceID); err != nil {
 		log.Printf("spotify alarm: next failed: %v", err)
 	}
-	sleepCtx(ctx, 400*time.Millisecond) // let the skip land
-	r.audio.Stop()                      // random track is playing; silence the tone
+	// Hand over only against evidence that music is actually playing. The
+	// tone is the thing that wakes you; silencing it on an assumption is how
+	// an alarm ends up showing its firing screen in total silence.
+	if !r.playbackConfirmed(ctx, deviceID, playbackConfirm) {
+		log.Printf("spotify alarm: playback not confirmed after the skip; keeping the alarm tone")
+		return
+	}
+	log.Printf("spotify alarm: playback confirmed on %q; silencing the alarm tone", r.device)
+	r.audio.Stop()
+}
+
+// playbackConfirmed reports whether deviceID is genuinely rendering audio. The
+// player must say it is playing on that device AND its track position must
+// advance between two reads: is_playing alone can be true while the device
+// produces nothing at all. Returns false if the alarm is dismissed or the
+// deadline passes first.
+func (r *alarmRinger) playbackConfirmed(ctx context.Context, deviceID string, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	prev := -1
+	for time.Now().Before(deadline) {
+		st, ok, err := r.spot.PlaybackState(ctx)
+		switch {
+		case err != nil:
+			log.Printf("spotify alarm: playback state unavailable: %v", err)
+			prev = -1
+		case !ok || !st.IsPlaying || st.Device.ID != deviceID:
+			prev = -1 // not playing here; start the comparison over
+		case prev >= 0 && st.ProgressMS > prev:
+			return true // the track position moved: audio is really running
+		default:
+			prev = st.ProgressMS
+		}
+		if !sleepCtx(ctx, playbackPoll) {
+			return false
+		}
+	}
+	return false
 }
 
 // sleepCtx sleeps for d, returning false if ctx is cancelled first.

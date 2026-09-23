@@ -91,6 +91,13 @@ func (c *Client) DeviceIDByName(ctx context.Context, name string) (string, bool,
 	return "", false, nil
 }
 
+// PlaybackState returns what the player is currently doing. ok is false when
+// Spotify reports no active playback at all.
+func (c *Client) PlaybackState(ctx context.Context) (state PlaybackState, ok bool, err error) {
+	found, err := c.apiGetOptional(ctx, "/me/player", &state)
+	return state, found, err
+}
+
 // Play starts playback on the given device. A contextURI (album/playlist/
 // artist) or a set of track URIs may be supplied.
 func (c *Client) Play(ctx context.Context, deviceID, contextURI string, uris []string) error {

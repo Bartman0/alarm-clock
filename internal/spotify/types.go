@@ -38,6 +38,16 @@ type Playlist struct {
 	URI  string `json:"uri"`
 }
 
+// PlaybackState is what Spotify reports about current playback. ProgressMS is
+// the position in the current track: it advancing between two reads is the
+// only real evidence that audio is being rendered, since is_playing can be
+// true while the device produces nothing.
+type PlaybackState struct {
+	IsPlaying  bool   `json:"is_playing"`
+	ProgressMS int    `json:"progress_ms"`
+	Device     Device `json:"device"`
+}
+
 // Device is a Spotify Connect playback device.
 type Device struct {
 	ID       string `json:"id"`
