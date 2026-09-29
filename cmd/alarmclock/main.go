@@ -34,6 +34,17 @@ const (
 	// "Restriction violated".
 	playbackConfirm = 20 * time.Second
 	playbackPoll    = time.Second
+
+	// playbackBudget is how long we keep trying to get music playing before
+	// giving up. The alarm tone rings throughout, so there is no reason to
+	// stop early: librespot may need a restart and a re-registration with
+	// Spotify, which can take far longer than one attempt.
+	playbackBudget = 5 * time.Minute
+	retryInterval  = 3 * time.Second
+
+	// librespotRecheck is how long we give librespot to reappear on Spotify's
+	// device list after a restart before concluding the restart did not take.
+	librespotRecheck = 45 * time.Second
 )
 
 func main() {
@@ -146,7 +157,7 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 
 	go func() {
 		defer cancel()
-		ctx, tcancel := context.WithTimeout(ctx, 90*time.Second)
+		ctx, tcancel := context.WithTimeout(ctx, playbackBudget)
 		defer tcancel()
 
 		// If the alarm is dismissed while this goroutine is starting playback,
@@ -185,18 +196,40 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 		if play() {
 			return
 		}
-		// Device likely dropped off while idle overnight; restart librespot to
-		// re-register it, then poll until it reappears.
-		log.Printf("spotify alarm: device %q unavailable, restarting librespot", r.device)
+		// Either the device dropped off while idle overnight, or it is a
+		// stale entry on Spotify's list that accepts commands without playing
+		// anything. Restart librespot and keep trying: the tone is ringing
+		// throughout, so the only thing giving up early would achieve is a
+		// silent bedroom once you hit Stop.
+		log.Printf("spotify alarm: restarting librespot and retrying for up to %s", playbackBudget)
 		r.lib.Restart()
-		for {
+		lastRestart := time.Now()
+
+		for attempt := 1; ; attempt++ {
 			select {
 			case <-ctx.Done():
+				log.Printf("spotify alarm: gave up after %s without confirmed playback; the alarm tone is still ringing", playbackBudget)
 				return
-			case <-time.After(3 * time.Second):
+			case <-time.After(retryInterval):
 			}
-			if _, ok, _ := r.spot.DeviceIDByName(ctx, r.device); ok && play() {
-				return
+
+			_, ok, err := r.spot.DeviceIDByName(ctx, r.device)
+			switch {
+			case err != nil:
+				log.Printf("spotify alarm: device lookup failed: %v", err)
+			case !ok:
+				// librespot has not come back yet. If it has had long enough,
+				// the restart did not take — kill it again.
+				if time.Since(lastRestart) >= librespotRecheck {
+					log.Printf("spotify alarm: %q still not registered %s after the restart, restarting librespot again", r.device, librespotRecheck)
+					r.lib.Restart()
+					lastRestart = time.Now()
+				}
+			default:
+				log.Printf("spotify alarm: %q is back on the device list, retrying playback (attempt %d)", r.device, attempt)
+				if play() {
+					return
+				}
 			}
 		}
 	}()
