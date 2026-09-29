@@ -4,8 +4,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,6 +160,8 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 			}
 		}()
 
+		r.logDevices(ctx)
+
 		play := func() bool {
 			id, ok, err := r.spot.DeviceIDByName(ctx, r.device)
 			if err != nil || !ok {
@@ -229,24 +233,60 @@ func (r *alarmRinger) randomizeStart(ctx context.Context, deviceID string) {
 func (r *alarmRinger) playbackConfirmed(ctx context.Context, deviceID string, within time.Duration) bool {
 	deadline := time.Now().Add(within)
 	prev := -1
+	seen := "no reading taken"
 	for time.Now().Before(deadline) {
 		st, ok, err := r.spot.PlaybackState(ctx)
 		switch {
 		case err != nil:
-			log.Printf("spotify alarm: playback state unavailable: %v", err)
+			seen = fmt.Sprintf("player state unavailable: %v", err)
 			prev = -1
-		case !ok || !st.IsPlaying || st.Device.ID != deviceID:
-			prev = -1 // not playing here; start the comparison over
+		case !ok:
+			seen = "Spotify reports nothing playing anywhere"
+			prev = -1
+		case st.Device.ID != deviceID:
+			seen = fmt.Sprintf("playback is on %q, not us", st.Device.Name)
+			prev = -1
+		case !st.IsPlaying:
+			seen = "our device holds playback but is paused"
+			prev = -1
 		case prev >= 0 && st.ProgressMS > prev:
 			return true // the track position moved: audio is really running
+		case prev < 0:
+			seen = fmt.Sprintf("playing, first position reading %dms", st.ProgressMS)
+			prev = st.ProgressMS
 		default:
+			// The usual shape of a silent alarm: Spotify believes the track
+			// is playing, but the position never moves, so librespot is
+			// connected without rendering anything.
+			seen = fmt.Sprintf("is_playing is true but the position is frozen at %dms", st.ProgressMS)
 			prev = st.ProgressMS
 		}
 		if !sleepCtx(ctx, playbackPoll) {
 			return false
 		}
 	}
+	log.Printf("spotify alarm: playback unconfirmed after %s — last reading: %s", within, seen)
 	return false
+}
+
+// logDevices records what Spotify can see when an alarm tries to play, so a
+// failure says whether the Pi was even on the device list and what else was
+// holding playback.
+func (r *alarmRinger) logDevices(ctx context.Context) {
+	devs, err := r.spot.Devices(ctx)
+	if err != nil {
+		log.Printf("spotify alarm: device list unavailable: %v", err)
+		return
+	}
+	if len(devs) == 0 {
+		log.Printf("spotify alarm: Spotify sees no Connect devices at all")
+		return
+	}
+	seen := make([]string, 0, len(devs))
+	for _, d := range devs {
+		seen = append(seen, fmt.Sprintf("%q(active=%t)", d.Name, d.IsActive))
+	}
+	log.Printf("spotify alarm: devices visible: %s", strings.Join(seen, " "))
 }
 
 // sleepCtx sleeps for d, returning false if ctx is cancelled first.

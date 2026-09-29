@@ -5,6 +5,8 @@
 package librespot
 
 import (
+	"bufio"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -79,14 +81,41 @@ func (s *Supervisor) loop() {
 			// the actual level, so a low default just makes it seem quiet.
 			"--initial-volume", "100",
 		)
+		// Forward librespot's own output into our log. When an alarm plays
+		// nothing, librespot is usually the only thing that knows why (audio
+		// backend errors, track load failures, session drops) — and until we
+		// captured this it went to /dev/null.
+		stdout, errOut := cmd.StdoutPipe()
+		stderr, errErr := cmd.StderrPipe()
+
 		s.mu.Lock()
 		s.cmd = cmd
 		s.mu.Unlock()
 
 		if err := cmd.Start(); err != nil {
 			log.Printf("librespot: start failed: %v", err)
-		} else if err := cmd.Wait(); err != nil {
-			log.Printf("librespot: exited: %v", err)
+		} else {
+			var pipes sync.WaitGroup
+			for _, pipe := range []struct {
+				r   io.ReadCloser
+				err error
+			}{{stdout, errOut}, {stderr, errErr}} {
+				if pipe.err != nil || pipe.r == nil {
+					continue
+				}
+				pipes.Add(1)
+				go func(r io.ReadCloser) {
+					defer pipes.Done()
+					relayOutput(r)
+				}(pipe.r)
+			}
+			err := cmd.Wait()
+			pipes.Wait() // drain what librespot said on its way out
+			if err != nil {
+				log.Printf("librespot: exited: %v", err)
+			} else {
+				log.Printf("librespot: exited cleanly")
+			}
 		}
 
 		// Back off before restarting, unless we're stopping.
@@ -94,6 +123,18 @@ func (s *Supervisor) loop() {
 		case <-s.stop:
 			return
 		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// relayOutput copies a librespot pipe into the app log, one line at a time.
+func relayOutput(r io.ReadCloser) {
+	defer r.Close()
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 4096), 64*1024)
+	for sc.Scan() {
+		if line := sc.Text(); line != "" {
+			log.Printf("librespot: %s", line)
 		}
 	}
 }
