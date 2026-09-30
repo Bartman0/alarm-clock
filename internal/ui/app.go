@@ -46,6 +46,11 @@ const (
 	// log the miss rather than wake you at an hour you did not ask for.
 	fireGrace = 2 * time.Minute
 
+	// prepareLead is how far ahead of an alarm the ringer is asked to make
+	// sure it can actually make a sound. Long enough to restart a Spotify
+	// Connect session and have it register again, with slack.
+	prepareLead = 5 * time.Minute
+
 	// heartbeatInterval is how often the scheduler proves it is alive in the
 	// log; stallThreshold and stepThreshold are when a tick gap or a
 	// wall-clock jump is worth recording.
@@ -64,6 +69,7 @@ const (
 	opNone ringOp = iota
 	opStart
 	opStop
+	opPrepare
 )
 
 // App owns all screen state and drives navigation, alarm timing and layout.
@@ -115,16 +121,17 @@ type App struct {
 	// the UI; guarded by mu. ringingIdx >= 0 means an alarm is ringing (the UI
 	// shows the firing screen regardless of cur). disableOnce is the index of a
 	// fired Eenmalig alarm the UI goroutine should disable, or -1.
-	mu          sync.Mutex
-	ringingIdx  int
-	ringStart   time.Time
-	snoozeUntil time.Time
-	snoozeIdx   int
-	lastFired   [alarm.Count]time.Time // the occurrence fired, per alarm
-	seeded      bool                   // past occurrences marked on the first tick
-	disableOnce int
-	btnSnooze   widget.Clickable
-	btnStop     widget.Clickable
+	mu           sync.Mutex
+	ringingIdx   int
+	ringStart    time.Time
+	snoozeUntil  time.Time
+	snoozeIdx    int
+	lastFired    [alarm.Count]time.Time // the occurrence fired, per alarm
+	lastPrepared [alarm.Count]time.Time // the occurrence warmed up, per alarm
+	seeded       bool                   // past occurrences marked on the first tick
+	disableOnce  int
+	btnSnooze    widget.Clickable
+	btnStop      widget.Clickable
 
 	// Radio screen.
 	radioBack    widget.Clickable
@@ -334,7 +341,7 @@ func (a *App) evaluate(now time.Time) {
 	a.mu.Unlock()
 
 	a.applyRingOp(op, al)
-	if op != opNone && a.invalidate != nil {
+	if op != opNone && op != opPrepare && a.invalidate != nil {
 		a.invalidate()
 	}
 }
@@ -347,6 +354,10 @@ func (a *App) applyRingOp(op ringOp, al alarm.Alarm) {
 		a.ringer.Start(al)
 	case opStop:
 		a.ringer.Stop()
+	case opPrepare:
+		if p, ok := a.ringer.(Preparer); ok {
+			p.Prepare(al)
+		}
 	}
 }
 
@@ -403,6 +414,31 @@ func (a *App) tickLocked(now time.Time) (ringOp, alarm.Alarm) {
 			a.disableOnce = i
 		}
 		return a.startRingingLocked(i, now)
+	}
+
+	return a.prepareLocked(now)
+}
+
+// prepareLocked asks the ringer, once per occurrence, to make sure it will be
+// able to sound an alarm that is prepareLead away. The caller must hold a.mu.
+func (a *App) prepareLocked(now time.Time) (ringOp, alarm.Alarm) {
+	for i := range a.store.Alarms {
+		al := a.store.Alarms[i]
+		if !al.Enabled {
+			continue
+		}
+		sched := occurrence(al, now)
+		if !sched.After(now) { // today's has passed; look at tomorrow's
+			sched = sched.AddDate(0, 0, 1)
+		}
+		if !al.Rhythm.Active(sched.Weekday()) || a.lastPrepared[i].Equal(sched) {
+			continue
+		}
+		if sched.Sub(now) > prepareLead {
+			continue
+		}
+		a.lastPrepared[i] = sched
+		return opPrepare, al
 	}
 	return opNone, alarm.Alarm{}
 }

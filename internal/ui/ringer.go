@@ -14,6 +14,15 @@ type Ringer interface {
 	Stop()
 }
 
+// Preparer is an optional Ringer capability. The scheduler calls Prepare once
+// per alarm occurrence, prepareLead before it is due, so a ringer that depends
+// on something fragile (a Spotify Connect session that goes stale overnight)
+// can get it working again while there is still time to spare. Implementations
+// must return promptly and do their work in the background.
+type Preparer interface {
+	Prepare(a alarm.Alarm)
+}
+
 // RadioPlayer plays and stops an internet-radio stream URL. audio.Controller
 // implements both this and Ringer over one shared mpv player.
 type RadioPlayer interface {

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -45,6 +46,9 @@ const (
 	// librespotRecheck is how long we give librespot to reappear on Spotify's
 	// device list after a restart before concluding the restart did not take.
 	librespotRecheck = 45 * time.Second
+
+	// prepareBudget bounds the pre-alarm warm-up (see Prepare).
+	prepareBudget = 90 * time.Second
 )
 
 func main() {
@@ -186,7 +190,9 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 			// device to actually be playing before issuing player commands or
 			// touching the tone.
 			if !r.playbackConfirmed(ctx, id, playbackConfirm) {
-				log.Printf("spotify alarm: %q accepted Play but never started playing", r.device)
+				if ctx.Err() == nil { // a dismissed alarm is not a playback failure
+					log.Printf("spotify alarm: %q accepted Play but never started playing", r.device)
+				}
 				return false
 			}
 			r.randomizeStart(ctx, id)
@@ -195,6 +201,9 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 
 		if play() {
 			return
+		}
+		if ctx.Err() != nil {
+			return // dismissed mid-attempt: leave librespot alone
 		}
 		// Either the device dropped off while idle overnight, or it is a
 		// stale entry on Spotify's list that accepts commands without playing
@@ -208,7 +217,9 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 		for attempt := 1; ; attempt++ {
 			select {
 			case <-ctx.Done():
-				log.Printf("spotify alarm: gave up after %s without confirmed playback; the alarm tone is still ringing", playbackBudget)
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					log.Printf("spotify alarm: gave up after %s without confirmed playback", playbackBudget)
+				}
 				return
 			case <-time.After(retryInterval):
 			}
@@ -232,6 +243,46 @@ func (r *alarmRinger) Start(a alarm.Alarm) {
 				}
 			}
 		}
+	}()
+}
+
+// Prepare refreshes the Spotify Connect session shortly before a Spotify alarm
+// is due. librespot holds a long-lived TCP session to a Spotify access point;
+// after hours of idle overnight that session can be dead without librespot
+// knowing, and the first thing to discover it is the alarm itself — too late,
+// and in the dark. Restarting here means a broken session is found and fixed
+// with minutes to spare instead of at the moment you need to wake up.
+//
+// It satisfies ui.Preparer; the scheduler calls it once per alarm occurrence.
+func (r *alarmRinger) Prepare(a alarm.Alarm) {
+	if a.Sound.Kind != alarm.SoundSpotify || r.spot == nil || !r.spot.Authorized() {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), prepareBudget)
+		defer cancel()
+
+		// Music playing on our device proves the session is alive, and
+		// restarting would cut off whatever is playing. Leave it be.
+		if st, ok, err := r.spot.PlaybackState(ctx); err == nil && ok && st.IsPlaying && st.Device.Name == r.device {
+			log.Printf("spotify warm-up: %q is already playing; leaving the session alone", r.device)
+			return
+		}
+
+		log.Printf("spotify warm-up: refreshing librespot ahead of the %s alarm", a.TimeString())
+		r.lib.Restart()
+
+		deadline := time.Now().Add(prepareBudget)
+		for time.Now().Before(deadline) {
+			if !sleepCtx(ctx, retryInterval) {
+				return
+			}
+			if _, ok, err := r.spot.DeviceIDByName(ctx, r.device); err == nil && ok {
+				log.Printf("spotify warm-up: %q re-registered and ready", r.device)
+				return
+			}
+		}
+		log.Printf("spotify warm-up: %q did not re-register within %s — the alarm will fall back to the tone", r.device, prepareBudget)
 	}()
 }
 

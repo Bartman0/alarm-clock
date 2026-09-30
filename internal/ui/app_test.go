@@ -309,3 +309,77 @@ func TestLogsMissedOccurrence(t *testing.T) {
 		t.Fatalf("a missed occurrence must not ring: started=%d", r.started)
 	}
 }
+
+type preparingRinger struct {
+	fakeRinger
+	prepared []alarm.Alarm
+}
+
+func (p *preparingRinger) Prepare(a alarm.Alarm) { p.prepared = append(p.prepared, a) }
+
+func newPreparingApp(al alarm.Alarm) (*App, *preparingRinger) {
+	store := &config.Store{}
+	store.Alarms[0] = al
+	r := &preparingRinger{}
+	return NewApp(NewTheme(), store, r), r
+}
+
+// The warm-up exists because a Spotify Connect session can die overnight
+// without librespot noticing, and the alarm itself is the worst possible
+// moment to find out. It must run ahead of the alarm, exactly once.
+func TestPreparesShortlyBeforeTheAlarm(t *testing.T) {
+	app, r := newPreparingApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.evaluate(time.Date(2026, 9, 30, 7, 50, 0, 0, time.UTC)) // 10 min out: too early
+	if len(r.prepared) != 0 {
+		t.Fatalf("prepared too early: %d", len(r.prepared))
+	}
+
+	app.evaluate(time.Date(2026, 9, 30, 7, 56, 0, 0, time.UTC)) // 4 min out
+	app.evaluate(time.Date(2026, 9, 30, 7, 57, 0, 0, time.UTC)) // still the same occurrence
+	if len(r.prepared) != 1 {
+		t.Fatalf("prepare ran %d times, want exactly 1 per occurrence", len(r.prepared))
+	}
+	if r.prepared[0].Hour != 8 {
+		t.Fatalf("prepared the wrong alarm: %+v", r.prepared[0])
+	}
+}
+
+// Warming up must not interfere with firing, and the next day's occurrence is
+// a fresh one to prepare.
+func TestPrepareDoesNotBlockFiringAndRepeatsDaily(t *testing.T) {
+	app, r := newPreparingApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.evaluate(time.Date(2026, 9, 30, 7, 56, 0, 0, time.UTC)) // warms up
+	app.evaluate(time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC))  // fires
+	if !app.ringing() || r.started != 1 {
+		t.Fatalf("alarm did not fire after a warm-up: ringing=%v started=%d", app.ringing(), r.started)
+	}
+	app.stopRinging()
+
+	app.evaluate(time.Date(2026, 10, 1, 7, 56, 0, 0, time.UTC)) // next day
+	if len(r.prepared) != 2 {
+		t.Fatalf("prepare ran %d times over two days, want 2", len(r.prepared))
+	}
+}
+
+// A rhythm that skips tomorrow must not be warmed up for a day it won't ring.
+func TestDoesNotPrepareForASkippedDay(t *testing.T) {
+	app, r := newPreparingApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.Workweek})
+
+	// Saturday 07:56 — the next occurrence is Monday, not in prepare range.
+	app.evaluate(time.Date(2026, 10, 3, 7, 56, 0, 0, time.UTC))
+	if len(r.prepared) != 0 {
+		t.Fatalf("warmed up for a day the alarm does not ring: %d", len(r.prepared))
+	}
+}
+
+// A ringer without Prepare must keep working untouched.
+func TestPlainRingerNeedsNoPrepare(t *testing.T) {
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.FullWeek})
+	app.evaluate(time.Date(2026, 9, 30, 7, 56, 0, 0, time.UTC))
+	app.evaluate(time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC))
+	if !app.ringing() || r.started != 1 {
+		t.Fatalf("plain ringer broke: ringing=%v started=%d", app.ringing(), r.started)
+	}
+}
