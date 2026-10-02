@@ -11,19 +11,52 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
+
+// autoRestartCooldown rate-limits the watchdog below, so a librespot that
+// fails the same way immediately after starting cannot be respawned in a hot
+// loop.
+const autoRestartCooldown = 2 * time.Minute
+
+// unrecoverableLogLines are librespot messages after which the process can no
+// longer play anything, however healthy it otherwise looks.
+//
+// librespot 0.8.0 recovers its session after a dropped websocket but not its
+// audio key channel: it reconnects and re-authenticates cleanly, and then
+// fails to decrypt every track it is asked to play ("Unable to load key" →
+// "end of stream" → "Skipping to next track"). Nothing short of a restart
+// clears it, so we watch its own output for the moment it happens.
+//
+// Matching log text is brittle across librespot versions; keep this list to
+// the one unambiguous signal and re-check it on upgrade.
+var unrecoverableLogLines = []string{
+	"Audio key response timeout",
+}
+
+// unrecoverable reports whether a librespot log line means the process can no
+// longer play and must be restarted.
+func unrecoverable(line string) bool {
+	for _, pattern := range unrecoverableLogLines {
+		if strings.Contains(line, pattern) {
+			return true
+		}
+	}
+	return false
+}
 
 // Supervisor starts librespot and restarts it if it exits.
 type Supervisor struct {
 	name     string
 	cacheDir string
 
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	running bool
-	stop    chan struct{}
+	mu              sync.Mutex
+	cmd             *exec.Cmd
+	running         bool
+	stop            chan struct{}
+	lastAutoRestart time.Time
 }
 
 // New returns a supervisor that advertises the given Connect device name.
@@ -106,7 +139,7 @@ func (s *Supervisor) loop() {
 				pipes.Add(1)
 				go func(r io.ReadCloser) {
 					defer pipes.Done()
-					relayOutput(r)
+					s.relay(r)
 				}(pipe.r)
 			}
 			err := cmd.Wait()
@@ -127,16 +160,42 @@ func (s *Supervisor) loop() {
 	}
 }
 
-// relayOutput copies a librespot pipe into the app log, one line at a time.
-func relayOutput(r io.ReadCloser) {
+// relay copies a librespot pipe into the app log, one line at a time, and
+// restarts librespot when a line says it can no longer play. Restarting on its
+// own diagnosis is what keeps an idle-broken process from being discovered by
+// an alarm at the worst possible moment.
+func (s *Supervisor) relay(r io.ReadCloser) {
 	defer r.Close()
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 4096), 64*1024)
 	for sc.Scan() {
-		if line := sc.Text(); line != "" {
-			log.Printf("librespot: %s", line)
+		line := sc.Text()
+		if line == "" {
+			continue
 		}
+		log.Printf("librespot: %s", line)
+		if !unrecoverable(line) {
+			continue
+		}
+		if !s.claimAutoRestart(time.Now()) {
+			log.Printf("librespot: still unable to play, but it was already restarted within %s; leaving it alone", autoRestartCooldown)
+			continue
+		}
+		log.Printf("librespot: that failure cannot be recovered in-process; restarting")
+		s.Restart()
 	}
+}
+
+// claimAutoRestart reports whether the watchdog may restart librespot now,
+// recording the attempt when it may. One restart per autoRestartCooldown.
+func (s *Supervisor) claimAutoRestart(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.lastAutoRestart.IsZero() && now.Sub(s.lastAutoRestart) < autoRestartCooldown {
+		return false
+	}
+	s.lastAutoRestart = now
+	return true
 }
 
 // Restart kills the current librespot process; the supervisor relaunches it
