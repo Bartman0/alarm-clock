@@ -13,11 +13,12 @@ import (
 )
 
 type fakeRinger struct {
-	started, stopped int
-	last             alarm.Alarm
+	started, snoozed, stopped int
+	last                      alarm.Alarm
 }
 
 func (f *fakeRinger) Start(a alarm.Alarm) { f.started++; f.last = a }
+func (f *fakeRinger) Snooze()             { f.snoozed++ }
 func (f *fakeRinger) Stop()               { f.stopped++ }
 
 func newTestApp(al alarm.Alarm) (*App, *fakeRinger) {
@@ -312,10 +313,17 @@ func TestLogsMissedOccurrence(t *testing.T) {
 
 type preparingRinger struct {
 	fakeRinger
-	prepared []alarm.Alarm
+	prepared   []alarm.Alarm
+	preparedAt []time.Time
+	cancelled  int
 }
 
-func (p *preparingRinger) Prepare(a alarm.Alarm) { p.prepared = append(p.prepared, a) }
+func (p *preparingRinger) Prepare(a alarm.Alarm, at time.Time) {
+	p.prepared = append(p.prepared, a)
+	p.preparedAt = append(p.preparedAt, at)
+}
+
+func (p *preparingRinger) CancelPrepare() { p.cancelled++ }
 
 func newPreparingApp(al alarm.Alarm) (*App, *preparingRinger) {
 	store := &config.Store{}
@@ -330,18 +338,21 @@ func newPreparingApp(al alarm.Alarm) (*App, *preparingRinger) {
 func TestPreparesShortlyBeforeTheAlarm(t *testing.T) {
 	app, r := newPreparingApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.FullWeek})
 
-	app.evaluate(time.Date(2026, 9, 30, 7, 50, 0, 0, time.UTC)) // 10 min out: too early
+	app.evaluate(time.Date(2026, 9, 30, 7, 57, 0, 0, time.UTC)) // 3 min out: too early
 	if len(r.prepared) != 0 {
 		t.Fatalf("prepared too early: %d", len(r.prepared))
 	}
 
-	app.evaluate(time.Date(2026, 9, 30, 7, 56, 0, 0, time.UTC)) // 4 min out
-	app.evaluate(time.Date(2026, 9, 30, 7, 57, 0, 0, time.UTC)) // still the same occurrence
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 0, 0, time.UTC)) // 2 min out
+	app.evaluate(time.Date(2026, 9, 30, 7, 59, 0, 0, time.UTC)) // still the same occurrence
 	if len(r.prepared) != 1 {
 		t.Fatalf("prepare ran %d times, want exactly 1 per occurrence", len(r.prepared))
 	}
 	if r.prepared[0].Hour != 8 {
 		t.Fatalf("prepared the wrong alarm: %+v", r.prepared[0])
+	}
+	if want := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC); !r.preparedAt[0].Equal(want) {
+		t.Fatalf("prepared for %s, want the occurrence %s", r.preparedAt[0], want)
 	}
 }
 
@@ -350,14 +361,14 @@ func TestPreparesShortlyBeforeTheAlarm(t *testing.T) {
 func TestPrepareDoesNotBlockFiringAndRepeatsDaily(t *testing.T) {
 	app, r := newPreparingApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.FullWeek})
 
-	app.evaluate(time.Date(2026, 9, 30, 7, 56, 0, 0, time.UTC)) // warms up
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 0, 0, time.UTC)) // warms up
 	app.evaluate(time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC))  // fires
 	if !app.ringing() || r.started != 1 {
 		t.Fatalf("alarm did not fire after a warm-up: ringing=%v started=%d", app.ringing(), r.started)
 	}
 	app.stopRinging()
 
-	app.evaluate(time.Date(2026, 10, 1, 7, 56, 0, 0, time.UTC)) // next day
+	app.evaluate(time.Date(2026, 10, 1, 7, 58, 0, 0, time.UTC)) // next day
 	if len(r.prepared) != 2 {
 		t.Fatalf("prepare ran %d times over two days, want 2", len(r.prepared))
 	}
@@ -367,8 +378,8 @@ func TestPrepareDoesNotBlockFiringAndRepeatsDaily(t *testing.T) {
 func TestDoesNotPrepareForASkippedDay(t *testing.T) {
 	app, r := newPreparingApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.Workweek})
 
-	// Saturday 07:56 — the next occurrence is Monday, not in prepare range.
-	app.evaluate(time.Date(2026, 10, 3, 7, 56, 0, 0, time.UTC))
+	// Saturday 07:58 — the next occurrence is Monday, not in prepare range.
+	app.evaluate(time.Date(2026, 10, 3, 7, 58, 0, 0, time.UTC))
 	if len(r.prepared) != 0 {
 		t.Fatalf("warmed up for a day the alarm does not ring: %d", len(r.prepared))
 	}
@@ -377,9 +388,85 @@ func TestDoesNotPrepareForASkippedDay(t *testing.T) {
 // A ringer without Prepare must keep working untouched.
 func TestPlainRingerNeedsNoPrepare(t *testing.T) {
 	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.FullWeek})
-	app.evaluate(time.Date(2026, 9, 30, 7, 56, 0, 0, time.UTC))
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 0, 0, time.UTC))
 	app.evaluate(time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC))
 	if !app.ringing() || r.started != 1 {
 		t.Fatalf("plain ringer broke: ringing=%v started=%d", app.ringing(), r.started)
+	}
+}
+
+// Snoozing hands the ringer a Snooze, not a Stop: a Spotify alarm keeps its
+// playlist going at volume 0 so ringing again is just a volume ramp.
+func TestSnoozeSnoozesTheRinger(t *testing.T) {
+	now := time.Date(2026, 7, 22, 7, 0, 0, 0, time.UTC)
+	app, r := newTestApp(alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.evaluate(now)
+	app.snooze(now)
+	if r.snoozed != 1 || r.stopped != 0 {
+		t.Fatalf("snooze: snoozed=%d stopped=%d, want 1 and 0", r.snoozed, r.stopped)
+	}
+}
+
+// An alarm edited during its warm-up must not ring as warmed up: the warm-up
+// is abandoned and redone with the new settings.
+func TestEditDuringWarmUpRedoesIt(t *testing.T) {
+	al := alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.FullWeek,
+		Sound: alarm.Sound{Kind: alarm.SoundSpotify, Ref: "spotify:playlist:a"}}
+	app, r := newPreparingApp(al)
+
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 30, 0, time.UTC)) // warms up
+	al.Sound.Ref = "spotify:playlist:b"
+	app.setAlarm(0, al)
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 31, 0, time.UTC)) // notices the edit
+	if r.cancelled != 1 {
+		t.Fatalf("warm-up not cancelled after an edit: cancelled=%d", r.cancelled)
+	}
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 32, 0, time.UTC)) // warms up again
+	if len(r.prepared) != 2 || r.prepared[1].Sound.Ref != "spotify:playlist:b" {
+		t.Fatalf("warm-up not redone with the new settings: %+v", r.prepared)
+	}
+}
+
+// Switching an alarm off during its warm-up ends the warm-up for good.
+func TestDisableDuringWarmUpCancelsIt(t *testing.T) {
+	app, r := newPreparingApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 30, 0, time.UTC))
+	app.setAlarmEnabled(0, false)
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 31, 0, time.UTC))
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 32, 0, time.UTC))
+	if r.cancelled != 1 || len(r.prepared) != 1 {
+		t.Fatalf("disable during warm-up: cancelled=%d prepared=%d, want 1 and 1", r.cancelled, len(r.prepared))
+	}
+}
+
+// A warmed-up occurrence that is then missed must not leave the ringer
+// playing silently.
+func TestMissedOccurrenceCancelsItsWarmUp(t *testing.T) {
+	app, r := newPreparingApp(alarm.Alarm{Enabled: true, Hour: 8, Minute: 0, Rhythm: alarm.FullWeek})
+
+	app.evaluate(time.Date(2026, 9, 30, 7, 58, 30, 0, time.UTC))
+	captureLog(func() { app.evaluate(time.Date(2026, 9, 30, 8, 5, 0, 0, time.UTC)) }) // stalled past the grace
+	if r.started != 0 || r.cancelled != 1 {
+		t.Fatalf("missed occurrence: started=%d cancelled=%d, want 0 and 1", r.started, r.cancelled)
+	}
+}
+
+// The ringer holds one alarm at a time: a snoozed alarm keeps it, so another
+// alarm due meanwhile is not warmed up over it.
+func TestNoWarmUpWhileSnoozed(t *testing.T) {
+	store := &config.Store{}
+	store.Alarms[0] = alarm.Alarm{Enabled: true, Hour: 7, Minute: 0, Rhythm: alarm.FullWeek}
+	store.Alarms[1] = alarm.Alarm{Enabled: true, Hour: 7, Minute: 3, Rhythm: alarm.FullWeek}
+	r := &preparingRinger{}
+	app := NewApp(NewTheme(), store, r)
+
+	now := time.Date(2026, 9, 30, 7, 0, 0, 0, time.UTC)
+	app.evaluate(now) // alarm 0 fires
+	app.snooze(now)
+	app.evaluate(now.Add(90 * time.Second)) // alarm 1 is 90s out
+	if len(r.prepared) != 0 {
+		t.Fatalf("warmed up alarm 1 over a snoozed alarm 0: %+v", r.prepared)
 	}
 }

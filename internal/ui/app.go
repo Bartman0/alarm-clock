@@ -46,10 +46,10 @@ const (
 	// log the miss rather than wake you at an hour you did not ask for.
 	fireGrace = 2 * time.Minute
 
-	// prepareLead is how far ahead of an alarm the ringer is asked to make
-	// sure it can actually make a sound. Long enough to restart a Spotify
-	// Connect session and have it register again, with slack.
-	prepareLead = 5 * time.Minute
+	// prepareLead is how far ahead of an alarm the ringer is asked to get it
+	// going silently (a Spotify alarm starts its playlist at volume 0), so a
+	// broken session is found and repaired before anyone needs to wake up.
+	prepareLead = 2 * time.Minute
 
 	// heartbeatInterval is how often the scheduler proves it is alive in the
 	// log; stallThreshold and stepThreshold are when a tick gap or a
@@ -69,8 +69,18 @@ const (
 	opNone ringOp = iota
 	opStart
 	opStop
+	opSnooze
 	opPrepare
+	opCancelPrepare
 )
+
+// ringCmd is a ringOp with what it applies to: the alarm for opStart and
+// opPrepare, and for opPrepare also the occurrence being prepared.
+type ringCmd struct {
+	op ringOp
+	al alarm.Alarm
+	at time.Time
+}
 
 // App owns all screen state and drives navigation, alarm timing and layout.
 // Every screen lives as a method on App (across the ui package's files) and
@@ -121,17 +131,21 @@ type App struct {
 	// the UI; guarded by mu. ringingIdx >= 0 means an alarm is ringing (the UI
 	// shows the firing screen regardless of cur). disableOnce is the index of a
 	// fired Eenmalig alarm the UI goroutine should disable, or -1.
-	mu           sync.Mutex
-	ringingIdx   int
-	ringStart    time.Time
-	snoozeUntil  time.Time
-	snoozeIdx    int
-	lastFired    [alarm.Count]time.Time // the occurrence fired, per alarm
-	lastPrepared [alarm.Count]time.Time // the occurrence warmed up, per alarm
-	seeded       bool                   // past occurrences marked on the first tick
-	disableOnce  int
-	btnSnooze    widget.Clickable
-	btnStop      widget.Clickable
+	// preparedIdx >= 0 is the alarm the ringer is warming up for its next
+	// occurrence, and preparedAlarm the settings it was warmed up with.
+	mu            sync.Mutex
+	ringingIdx    int
+	ringStart     time.Time
+	snoozeUntil   time.Time
+	snoozeIdx     int
+	lastFired     [alarm.Count]time.Time // the occurrence fired, per alarm
+	lastPrepared  [alarm.Count]time.Time // the occurrence warmed up, per alarm
+	preparedIdx   int
+	preparedAlarm alarm.Alarm
+	seeded        bool // past occurrences marked on the first tick
+	disableOnce   int
+	btnSnooze     widget.Clickable
+	btnStop       widget.Clickable
 
 	// Radio screen.
 	radioBack    widget.Clickable
@@ -190,6 +204,7 @@ func NewApp(th *material.Theme, store *config.Store, ringer Ringer) *App {
 		cur:         screenHome,
 		editIdx:     -1,
 		ringingIdx:  -1,
+		preparedIdx: -1,
 		disableOnce: -1,
 		radioRows:   make([]widget.Clickable, maxRadioResults),
 		spotRows:    make([]widget.Clickable, maxSpotItems),
@@ -307,7 +322,7 @@ func logTimeAnomaly(mono, wall time.Duration) {
 // stalled or dead process; a jump in them is a clock step.
 func (a *App) logHeartbeat(now time.Time) {
 	a.mu.Lock()
-	ringing, snooze := a.ringingIdx, a.snoozeUntil
+	ringing, snooze, prepared := a.ringingIdx, a.snoozeUntil, a.preparedIdx
 	pending := make([]string, 0, alarm.Count)
 	for i := range a.store.Alarms {
 		al := a.store.Alarms[i]
@@ -329,6 +344,8 @@ func (a *App) logHeartbeat(now time.Time) {
 		state = fmt.Sprintf("ringing=%d", ringing)
 	} else if !snooze.IsZero() {
 		state = "snoozed until " + snooze.Format("15:04:05")
+	} else if prepared >= 0 {
+		state = fmt.Sprintf("warming-up=%d", prepared)
 	}
 	log.Printf("heartbeat: %s %s next[%s]", now.Format("2006-01-02 15:04:05 MST"), state, next)
 }
@@ -337,42 +354,51 @@ func (a *App) logHeartbeat(now time.Time) {
 // the lock, and refreshes the UI if firing state changed.
 func (a *App) evaluate(now time.Time) {
 	a.mu.Lock()
-	op, al := a.tickLocked(now)
+	cmd := a.tickLocked(now)
 	a.mu.Unlock()
 
-	a.applyRingOp(op, al)
-	if op != opNone && op != opPrepare && a.invalidate != nil {
-		a.invalidate()
-	}
-}
-
-// applyRingOp drives the ringer for a state change decided under a.mu. It must
-// be called with the lock released.
-func (a *App) applyRingOp(op ringOp, al alarm.Alarm) {
-	switch op {
-	case opStart:
-		a.ringer.Start(al)
-	case opStop:
-		a.ringer.Stop()
-	case opPrepare:
-		if p, ok := a.ringer.(Preparer); ok {
-			p.Prepare(al)
+	a.applyRingCmd(cmd)
+	switch cmd.op {
+	case opStart, opStop, opSnooze:
+		if a.invalidate != nil {
+			a.invalidate()
 		}
 	}
 }
 
-// tickLocked drives alarm firing, snooze wake-up and the ring time limit. The
-// caller must hold a.mu; the returned operation must be applied after
-// unlocking.
-func (a *App) tickLocked(now time.Time) (ringOp, alarm.Alarm) {
+// applyRingCmd drives the ringer for a state change decided under a.mu. It must
+// be called with the lock released.
+func (a *App) applyRingCmd(cmd ringCmd) {
+	switch cmd.op {
+	case opStart:
+		a.ringer.Start(cmd.al)
+	case opStop:
+		a.ringer.Stop()
+	case opSnooze:
+		a.ringer.Snooze()
+	case opPrepare:
+		if p, ok := a.ringer.(Preparer); ok {
+			p.Prepare(cmd.al, cmd.at)
+		}
+	case opCancelPrepare:
+		if p, ok := a.ringer.(Preparer); ok {
+			p.CancelPrepare()
+		}
+	}
+}
+
+// tickLocked drives alarm firing, snooze wake-up, the ring time limit and the
+// warm-up ahead of an alarm. The caller must hold a.mu; the returned command
+// must be applied after unlocking.
+func (a *App) tickLocked(now time.Time) ringCmd {
 	a.seedLastFiredLocked(now)
 
 	if a.ringingIdx >= 0 {
 		if now.Sub(a.ringStart) >= maxRingDuration {
 			log.Printf("alarm %d: auto-stopping after %s", a.ringingIdx, maxRingDuration)
-			return a.stopRingingLocked(), alarm.Alarm{}
+			return ringCmd{op: a.stopRingingLocked()}
 		}
-		return opNone, alarm.Alarm{}
+		return ringCmd{}
 	}
 
 	// Wake from snooze.
@@ -404,6 +430,10 @@ func (a *App) tickLocked(now time.Time) (ringOp, alarm.Alarm) {
 		if late >= fireGrace {
 			log.Printf("alarm %d: MISSED occurrence %s — noticed %s late (grace %s), not ringing now",
 				i, sched.Format("2006-01-02 15:04"), late.Round(time.Second), fireGrace)
+			if i == a.preparedIdx {
+				a.preparedIdx = -1
+				return ringCmd{op: opCancelPrepare}
+			}
 			continue
 		}
 		log.Printf("alarm %d: firing occurrence %s (%s late) rhythm=%s sound=%s",
@@ -416,12 +446,35 @@ func (a *App) tickLocked(now time.Time) (ringOp, alarm.Alarm) {
 		return a.startRingingLocked(i, now)
 	}
 
+	if cmd := a.checkPreparedLocked(); cmd.op != opNone {
+		return cmd
+	}
 	return a.prepareLocked(now)
 }
 
-// prepareLocked asks the ringer, once per occurrence, to make sure it will be
-// able to sound an alarm that is prepareLead away. The caller must hold a.mu.
-func (a *App) prepareLocked(now time.Time) (ringOp, alarm.Alarm) {
+// checkPreparedLocked abandons a warm-up whose alarm was edited or switched off
+// since, so the ringer does not hold a silent session for an alarm that will
+// not ring as prepared. A still-enabled alarm is prepared afresh on a later
+// tick. The caller must hold a.mu.
+func (a *App) checkPreparedLocked() ringCmd {
+	i := a.preparedIdx
+	if i < 0 || a.store.Alarms[i] == a.preparedAlarm {
+		return ringCmd{}
+	}
+	log.Printf("alarm %d: changed during its warm-up; abandoning it", i)
+	a.preparedIdx = -1
+	a.lastPrepared[i] = time.Time{}
+	return ringCmd{op: opCancelPrepare}
+}
+
+// prepareLocked asks the ringer, once per occurrence, to get an alarm that is
+// prepareLead away going. The ringer holds one alarm at a time, so nothing is
+// prepared while another warm-up or a snooze holds it; the caller must hold
+// a.mu.
+func (a *App) prepareLocked(now time.Time) ringCmd {
+	if a.preparedIdx >= 0 || !a.snoozeUntil.IsZero() {
+		return ringCmd{}
+	}
 	for i := range a.store.Alarms {
 		al := a.store.Alarms[i]
 		if !al.Enabled {
@@ -438,9 +491,11 @@ func (a *App) prepareLocked(now time.Time) (ringOp, alarm.Alarm) {
 			continue
 		}
 		a.lastPrepared[i] = sched
-		return opPrepare, al
+		a.preparedIdx, a.preparedAlarm = i, al
+		log.Printf("alarm %d: warming up for %s", i, sched.Format("2006-01-02 15:04"))
+		return ringCmd{op: opPrepare, al: al, at: sched}
 	}
-	return opNone, alarm.Alarm{}
+	return ringCmd{}
 }
 
 // occurrence is the alarm's scheduled moment on now's calendar day.
@@ -466,11 +521,12 @@ func (a *App) seedLastFiredLocked(now time.Time) {
 
 // startRingingLocked, stopRingingLocked and snoozeLocked mutate firing state
 // only. The caller must hold a.mu and apply the returned operation after
-// unlocking — see applyRingOp.
-func (a *App) startRingingLocked(i int, now time.Time) (ringOp, alarm.Alarm) {
+// unlocking — see applyRingCmd.
+func (a *App) startRingingLocked(i int, now time.Time) ringCmd {
 	a.ringingIdx = i
 	a.ringStart = now
-	return opStart, a.store.Alarms[i]
+	a.preparedIdx = -1 // Start takes over whatever the ringer was warming up
+	return ringCmd{op: opStart, al: a.store.Alarms[i]}
 }
 
 func (a *App) stopRingingLocked() ringOp {
@@ -491,7 +547,7 @@ func (a *App) snoozeLocked(now time.Time) ringOp {
 	a.snoozeIdx = a.ringingIdx
 	a.snoozeUntil = now.Add(snoozeDuration)
 	a.ringingIdx = -1
-	return opStop
+	return opSnooze
 }
 
 // stopRinging and snooze are the UI-facing entry points for the firing screen:
@@ -503,24 +559,26 @@ func (a *App) stopRinging() {
 	if op == opStop {
 		log.Printf("alarm stopped from the firing screen")
 	}
-	a.applyRingOp(op, alarm.Alarm{})
+	a.applyRingCmd(ringCmd{op: op})
 }
 
 func (a *App) snooze(now time.Time) {
 	a.mu.Lock()
 	op := a.snoozeLocked(now)
 	a.mu.Unlock()
-	a.applyRingOp(op, alarm.Alarm{})
+	a.applyRingCmd(ringCmd{op: op})
 }
 
 // stopAll silences everything from the home screen: it clears any ringing /
 // pending-snooze state and stops the alarm tone + Spotify (via the ringer),
 // the radio, and any interactive Spotify playback. Safe to call when nothing
-// is playing.
+// is playing. It also ends a warm-up in progress: an alarm due within
+// prepareLead then starts from scratch when it fires.
 func (a *App) stopAll() {
 	a.mu.Lock()
 	a.ringingIdx = -1
 	a.snoozeUntil = time.Time{}
+	a.preparedIdx = -1
 	a.mu.Unlock()
 
 	a.ringer.Stop() // alarm tone + Spotify pause + cancel any in-flight attempt

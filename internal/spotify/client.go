@@ -30,6 +30,7 @@ var Scopes = []string{
 type Config struct {
 	ClientID    string
 	RedirectURI string
+	APIBase     string // the Web API root; empty for Spotify's own
 }
 
 // Client talks to the Spotify Web API and manages OAuth tokens.
@@ -50,11 +51,14 @@ func New(cfg Config, tokens Tokens, onTokens func(Tokens)) *Client {
 	if cfg.RedirectURI == "" {
 		cfg.RedirectURI = DefaultRedirectURI
 	}
+	if cfg.APIBase == "" {
+		cfg.APIBase = "https://api.spotify.com/v1"
+	}
 	return &Client{
 		cfg:      cfg,
 		http:     &http.Client{Timeout: 15 * time.Second},
 		accounts: "https://accounts.spotify.com",
-		api:      "https://api.spotify.com/v1",
+		api:      cfg.APIBase,
 		market:   "NL",
 		onTokens: onTokens,
 		tokens:   tokens,

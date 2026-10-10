@@ -119,7 +119,8 @@ func (a *App) spotConnectStart() {
 // skip off the deterministic first track.
 // spotPlayShuffled plays a context (artist or playlist) with a randomized
 // start: begin the context, enable shuffle, then skip off the fixed first
-// track. The output is muted for that window so the false-start is silent.
+// track. The Connect volume stays at 0 for that window so the false-start is
+// silent, then goes to full: the slider (the PipeWire sink) sets the level.
 func (a *App) spotPlayShuffled(uri, name string) {
 	if a.spot == nil {
 		return
@@ -135,18 +136,20 @@ func (a *App) spotPlayShuffled(uri, name string) {
 			a.refresh()
 			return
 		}
-		// Mute the output while we start the context and skip off the fixed
-		// first track, so the wrong-song blip is silent. Always restore.
-		setSystemMute(true)
-		defer setSystemMute(false)
-
+		// Silence the device while we start the context and skip off the
+		// fixed first track, so the wrong-song blip is inaudible. It may
+		// still be up from earlier listening; an idle device can refuse the
+		// call, but then it is at its resting level of 0 anyway.
+		if err := a.spot.SetVolume(ctx, id, 0); err != nil {
+			log.Printf("spotify: silencing before play failed: %v", err)
+		}
 		if err := a.spot.Play(ctx, id, uri, nil); err != nil {
 			a.setSpotStatus("Afspelen mislukt: " + err.Error())
 			a.refresh()
 			return
 		}
 		// Wait until the device is actually playing before shuffling/skipping,
-		// so the mute reliably covers the whole false-start (playback start
+		// so the silence reliably covers the whole false-start (playback start
 		// latency over Spotify Connect is variable).
 		if !a.waitActive(ctx, id, 5*time.Second) {
 			log.Printf("spotify: device %q did not become active in time", a.spotDevice)
@@ -157,7 +160,11 @@ func (a *App) spotPlayShuffled(uri, name string) {
 		if err := a.spot.Next(ctx, id); err != nil {
 			log.Printf("spotify: next failed: %v", err)
 		}
-		time.Sleep(500 * time.Millisecond) // let the skip land before unmuting
+		time.Sleep(500 * time.Millisecond) // let the skip land before raising
+		if err := a.spot.SetVolume(ctx, id, 100); err != nil {
+			log.Printf("spotify: raising the volume failed: %v", err)
+			a.setSpotStatus("Afspelen: " + name + " (volume niet gezet)")
+		}
 		a.refresh()
 	}()
 }

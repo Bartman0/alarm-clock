@@ -34,7 +34,8 @@ func NewController() *Controller {
 }
 
 // Start rings the alarm tone: the alarm sound looped with a gentle fade-in.
-// (Spotify alarms play the tone first, then switch to music; see alarmRinger.)
+// (Spotify alarms ring it only while their music is not confirmed playing;
+// see alarmRinger.)
 func (c *Controller) Start(a alarm.Alarm) {
 	if !c.player.Enabled() || c.alarmSound == "" {
 		log.Printf("audio: alarm %s ringing (no audio backend)", a.TimeString())

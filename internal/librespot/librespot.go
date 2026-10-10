@@ -110,9 +110,11 @@ func (s *Supervisor) loop() {
 			"--bitrate", "320",
 			"--cache", s.cacheDir,
 			"--disable-audio-cache",
-			// Start at full Connect volume; the USB speaker/PipeWire sink set
-			// the actual level, so a low default just makes it seem quiet.
-			"--initial-volume", "100",
+			// Start silent. The Connect volume is the transient layer on top
+			// of the PipeWire sink (which holds the level the slider sets):
+			// whoever plays raises it on purpose, so a librespot that comes
+			// back after a crash or a restart never blares out on its own.
+			"--initial-volume", "0",
 		)
 		// Forward librespot's own output into our log. When an alarm plays
 		// nothing, librespot is usually the only thing that knows why (audio

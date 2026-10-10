@@ -29,11 +29,24 @@ fi
 # Match Go's log prefix format so supervisor and app lines read as one stream.
 note() { printf '%s supervisor: %s\n' "$(date '+%Y/%m/%d %H:%M:%S')" "$1" >>"$LOG"; }
 
+# Silence whatever a dead app left behind. The app runs mpv (alarm tone,
+# radio) and librespot (Spotify) as child processes; when it panics or is
+# killed they are orphaned and keep playing — a looping alarm tone nobody can
+# stop, or a second "Wekker" on Spotify next to the new one. librespot starts
+# at volume 0, so the next one comes back silent.
+silence_orphans() {
+	pkill -u "$(id -u)" -f 'alarmclock-mpv-' 2>/dev/null && note "killed an orphaned mpv"
+	pkill -u "$(id -u)" -x librespot 2>/dev/null && note "killed an orphaned librespot"
+	return 0
+}
+
 note "starting $BIN"
+silence_orphans
 while :; do
 	started=$(date +%s)
 	"$BIN" >>"$LOG" 2>&1
 	code=$?
 	note "alarmclock exited with status $code after $(($(date +%s) - started))s — restarting in 2s"
+	silence_orphans
 	sleep 2
 done

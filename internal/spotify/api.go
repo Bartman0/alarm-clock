@@ -138,6 +138,15 @@ func (c *Client) Next(ctx context.Context, deviceID string) error {
 	return c.apiSend(ctx, "POST", path, nil)
 }
 
+// SetVolume sets the Connect volume (0–100) of the given device.
+func (c *Client) SetVolume(ctx context.Context, deviceID string, percent int) error {
+	path := fmt.Sprintf("/me/player/volume?volume_percent=%d", percent)
+	if deviceID != "" {
+		path += "&device_id=" + url.QueryEscape(deviceID)
+	}
+	return c.apiSend(ctx, "PUT", path, nil)
+}
+
 // Transfer moves playback to the given device (and starts playing).
 func (c *Client) Transfer(ctx context.Context, deviceID string) error {
 	return c.apiSend(ctx, "PUT", "/me/player", map[string]any{

@@ -134,7 +134,13 @@ What the lines mean:
   the editor being opened.
 - `supervisor: alarmclock exited with status N` — the app crashed and was
   restarted. Before the supervisor existed, this left the kiosk dead until the
-  next reboot.
+  next reboot. `supervisor: killed an orphaned mpv/librespot` right after it
+  means the crashed app left sound playing, which the supervisor silenced.
+- `alarm N: warming up for …` and `spotify alarm: … is playing silently` — two
+  minutes ahead, a Spotify alarm starts its playlist at volume 0. If that is
+  followed by restarts and no `playing silently`, Spotify could not play. The
+  alarm then rings the tone (`ringing the tone meanwhile`) until the music
+  works.
 
 Scheduled alarms are level-triggered within a two-minute grace window, so a
 stall or a clock step across the alarm minute no longer loses the alarm — it
@@ -174,6 +180,11 @@ pgrep -a mpv librespot alarmclock
   `~/.cache/alarmclock/alarm.wav`.
 - **Spotify "device not found"**: activate the "Wekker" device once from the
   Spotify phone app; confirm librespot is running (`pgrep librespot`).
+- **Spotify plays on the Wekker but you hear nothing**: the device's Spotify
+  volume rests at 0. The app raises it when it plays (an alarm or the Spotify
+  screen), but music you send from your phone starts at 0, so turn it up in
+  the phone's Connect volume control. The home-screen slider sets the overall
+  level on top of that.
 - **Screen doesn't dim / stay-dim after 2 min idle**: `swayidle` dims the
   backlight to 50% and restores it on touch. It needs a writable backlight and
   the `video`-group udev rule (installed to `/etc/udev/rules.d/90-backlight.rules`).

@@ -53,4 +53,6 @@ type Device struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	IsActive bool   `json:"is_active"`
+	// VolumePercent is nil when the device does not report a volume.
+	VolumePercent *int `json:"volume_percent"`
 }
