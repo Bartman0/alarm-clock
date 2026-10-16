@@ -5,12 +5,10 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	"alarmclock/internal/alarm"
 	"alarmclock/internal/spotify"
-	"alarmclock/internal/ui"
 )
 
 // Volume has two layers. The PipeWire sink holds the intended level: the
@@ -64,174 +62,309 @@ type restarter interface {
 	Restart()
 }
 
-// The scheduler finds Prepare by type assertion; keep a signature drift from
-// silently switching the warm-up off.
-var _ ui.Preparer = (*alarmRinger)(nil)
-
 // alarmRinger sounds a firing alarm. A tone alarm is the mpv tone. A Spotify
 // alarm is a session that starts its playlist at volume 0 ahead of time (see
 // Prepare), so when the alarm is due all that is left is to skip to a fresh
 // track and raise the volume. Whenever Spotify is not confirmed playing at
 // that moment, the mpv tone rings while the session keeps trying, and is
-// silenced once music is. It satisfies ui.Ringer and ui.Preparer.
+// silenced once music is. It satisfies ui.Ringer.
+//
+// One goroutine (loop) owns everything below reqs and is the only one to touch
+// the tone. The public methods just queue a request for it, so they never
+// block their caller. Spotify calls run as jobs in their own goroutine, one at
+// a time: a job never stalls the loop, and the pause that ends one alarm
+// always lands before the next alarm's Play.
 type alarmRinger struct {
 	audio  tone
 	spot   *spotify.Client
 	lib    restarter
 	device string
+	reqs   chan func()
 
-	mu    sync.Mutex
-	sess  *session      // the Spotify alarm in progress, if any
-	quiet chan struct{} // closed once the last ended session is silenced
+	sess        *session // the Spotify alarm in progress, if any
+	job         *job     // the Spotify job in flight, if any
+	dirty       bool     // our device may be playing: silence it once free
+	lastRestart time.Time
 }
 
 // session is one Spotify alarm occurrence, from its warm-up through ringing
-// and snoozes until it is stopped. Its goroutine (run) owns all Spotify calls;
-// the fields below are guarded by alarmRinger.mu.
+// and snoozes until it is stopped.
 type session struct {
-	alarm  alarm.Alarm
+	alarm       alarm.Alarm
+	ringing     bool      // the alarm should be audible now
+	rung        bool      // it has rung at least once (so it is no mere warm-up)
+	ready       bool      // the playlist is confirmed playing on our device
+	id          string    // our device id, once ready
+	audible     bool      // our volume is up (or ramping up)
+	failed      bool      // the last attempt to start it failed
+	silentSince time.Time // when it last stopped ringing (or was created)
+}
+
+// jobKind is a step towards what the session wants; see nextJob.
+type jobKind int
+
+const (
+	jobNone    jobKind = iota
+	jobStart           // get the playlist playing at volume 0
+	jobReveal          // skip to a fresh track and ramp the volume up
+	jobLower           // back to volume 0 for a snooze
+	jobSilence         // pause our device and leave it at volume 0
+)
+
+type job struct {
+	kind   jobKind
+	sess   *session
 	cancel context.CancelFunc
-	wake   chan struct{} // nudges the goroutine when ringing changes
-	done   chan struct{} // closed when the goroutine has returned
-
-	ringing bool // the alarm should be audible now
-	rung    bool // it has rung at least once (so it is no mere warm-up)
-	ready   bool // the playlist is confirmed playing on our device
 }
 
-func (s *session) poke() {
-	select {
-	case s.wake <- struct{}{}:
-	default:
-	}
+func newAlarmRinger(audio tone, spot *spotify.Client, lib restarter, device string) *alarmRinger {
+	r := &alarmRinger{audio: audio, spot: spot, lib: lib, device: device, reqs: make(chan func(), 16)}
+	go r.loop()
+	return r
 }
 
-func (r *alarmRinger) spotifyAlarm(a alarm.Alarm) bool {
-	return a.Sound.Kind == alarm.SoundSpotify && a.Sound.Ref != "" && r.spot != nil && r.spot.Authorized()
-}
+// do runs f on the loop goroutine.
+func (r *alarmRinger) do(f func()) { r.reqs <- f }
 
 // Prepare starts a Spotify alarm's playlist at volume 0, ahead of the alarm.
 // librespot's long-lived session to Spotify can be dead after a night idle
 // without librespot knowing; playing for real, silently, finds that out — and
 // gives time to restart it — before anyone needs to wake up.
 func (r *alarmRinger) Prepare(a alarm.Alarm, at time.Time) {
-	if !r.spotifyAlarm(a) {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sess != nil {
-		log.Printf("spotify alarm: not warming up %s: another alarm holds the device", a.TimeString())
-		return
-	}
-	log.Printf("spotify alarm: warming up the %s alarm at volume 0, %s ahead", a.TimeString(), time.Until(at).Round(time.Second))
-	r.sess = r.startSessionLocked(a)
+	r.do(func() {
+		if !r.spotifyAlarm(a) {
+			return
+		}
+		if r.sess != nil {
+			log.Printf("spotify alarm: not warming up %s: another alarm holds the device", a.TimeString())
+			return
+		}
+		log.Printf("spotify alarm: warming up the %s alarm at volume 0, %s ahead", a.TimeString(), time.Until(at).Round(time.Second))
+		r.sess = newSession(a)
+	})
 }
 
 // CancelPrepare ends a warm-up that will not ring after all. A session that
 // has already rung is left alone: that is Stop's to end.
 func (r *alarmRinger) CancelPrepare() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sess == nil || r.sess.rung {
-		return
-	}
-	log.Printf("spotify alarm: warm-up for %s cancelled", r.sess.alarm.TimeString())
-	r.endSessionLocked()
+	r.do(func() {
+		if r.sess == nil || r.sess.rung {
+			return
+		}
+		log.Printf("spotify alarm: warm-up for %s cancelled", r.sess.alarm.TimeString())
+		r.endSession()
+	})
 }
 
 // Start makes the alarm audible: the warmed-up session if there is one for
 // this alarm, a fresh one otherwise, and the tone whenever music is not yet
-// confirmed. The tone is switched under r.mu, as the session does, so the two
-// can never leave it ringing over the music.
+// confirmed.
 func (r *alarmRinger) Start(a alarm.Alarm) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if r.sess != nil && (!r.spotifyAlarm(a) || r.sess.alarm.Sound.Ref != a.Sound.Ref) {
-		r.endSessionLocked() // a different alarm takes over the device
-	}
-	if !r.spotifyAlarm(a) {
+	r.do(func() {
+		if r.sess != nil && (!r.spotifyAlarm(a) || r.sess.alarm.Sound.Ref != a.Sound.Ref) {
+			r.endSession() // a different alarm takes over the device
+		}
+		if !r.spotifyAlarm(a) {
+			r.audio.Start(a)
+			return
+		}
+		if r.sess == nil {
+			r.sess = newSession(a)
+		}
+		s := r.sess
+		s.ringing, s.rung = true, true
+		if s.ready {
+			log.Printf("spotify alarm: %s is due; bringing up the warmed-up playlist", a.TimeString())
+			return
+		}
+		log.Printf("spotify alarm: %s is due but Spotify is not playing yet; ringing the tone meanwhile", a.TimeString())
 		r.audio.Start(a)
-		return
-	}
-	if r.sess == nil {
-		r.sess = r.startSessionLocked(a)
-	}
-	s := r.sess
-	s.ringing, s.rung = true, true
-	s.poke()
-	if s.ready {
-		log.Printf("spotify alarm: %s is due; bringing up the warmed-up playlist", a.TimeString())
-		return
-	}
-	log.Printf("spotify alarm: %s is due but Spotify is not playing yet; ringing the tone meanwhile", a.TimeString())
-	r.audio.Start(a)
+	})
 }
 
 // Snooze silences the alarm but keeps a Spotify session playing at volume 0,
 // so ringing again is once more just a skip and a volume ramp.
 func (r *alarmRinger) Snooze() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.audio.Stop()
-	if r.sess != nil {
-		r.sess.ringing = false
-		r.sess.poke()
-	}
+	r.do(func() {
+		r.audio.Stop()
+		if r.sess != nil {
+			r.sess.ringing = false
+			r.sess.silentSince = time.Now()
+		}
+	})
 }
 
 // Stop silences everything: the tone, the radio, the alarm's session, and
 // any music playing on our device.
 func (r *alarmRinger) Stop() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.audio.Stop()
-	r.endSessionLocked()
+	r.do(func() {
+		r.audio.Stop()
+		r.endSession()
+	})
 }
 
-// startSessionLocked launches a session for a. Its first Play waits for the
-// previous session to be silenced, or that session's Pause could land after
-// it and leave the new alarm paused. The caller must hold r.mu.
-func (r *alarmRinger) startSessionLocked(a alarm.Alarm) *session {
-	ctx, cancel := context.WithCancel(context.Background())
-	s := &session{
-		alarm:  a,
-		cancel: cancel,
-		wake:   make(chan struct{}, 1),
-		done:   make(chan struct{}),
-	}
-	go r.run(ctx, s, r.quiet)
-	return s
+func (r *alarmRinger) spotifyAlarm(a alarm.Alarm) bool {
+	return a.Sound.Kind == alarm.SoundSpotify && a.Sound.Ref != "" && r.spot != nil && r.spot.Authorized()
 }
 
-// endSessionLocked cancels the current session, if any, and then — in the
-// background, once it has stopped issuing commands — pauses our device and
-// returns its volume to 0. That happens even without a session, so Stop also
-// ends music started from the Spotify screen. The caller must hold r.mu.
-func (r *alarmRinger) endSessionLocked() {
-	s := r.sess
+func newSession(a alarm.Alarm) *session {
+	return &session{alarm: a, silentSince: time.Now()}
+}
+
+// endSession drops the current session, if any, and marks our device to be
+// paused and returned to volume 0 once the job in flight is done. That happens
+// even without a session, so Stop also ends music started from the Spotify
+// screen.
+func (r *alarmRinger) endSession() {
 	r.sess = nil
-	if s != nil {
-		s.cancel()
+	if r.spot != nil && r.spot.Authorized() {
+		r.dirty = true
 	}
-	if r.spot == nil || !r.spot.Authorized() {
+}
+
+// loop serves requests and job results, and after each one moves the device
+// a step closer to what the session wants. It also ends a session that has
+// played silently for silentMax.
+func (r *alarmRinger) loop() {
+	for {
+		r.schedule()
+		var expire <-chan time.Time
+		if s := r.sess; s != nil && !s.ringing {
+			expire = time.After(silentMax - time.Since(s.silentSince))
+		}
+		select {
+		case f := <-r.reqs:
+			f()
+		case <-expire:
+			log.Printf("spotify alarm: %s has played silently for %s without ringing; ending it", r.sess.alarm.TimeString(), silentMax)
+			r.endSession()
+		}
+	}
+}
+
+// nextJob is the step that brings the device closer to what the session wants.
+func (r *alarmRinger) nextJob() jobKind {
+	s := r.sess
+	switch {
+	case s == nil && r.dirty:
+		return jobSilence
+	case s == nil:
+		return jobNone
+	case !s.ready:
+		return jobStart
+	case s.ringing && !s.audible:
+		return jobReveal
+	case !s.ringing && s.audible:
+		return jobLower
+	}
+	return jobNone
+}
+
+// stale reports whether the job in flight no longer serves the session: it
+// belongs to one that has ended, or it ramps up an alarm that was snoozed.
+// Silencing is never stale: the next Play must not overtake its Pause.
+func (r *alarmRinger) stale(j *job) bool {
+	switch {
+	case j.kind == jobSilence:
+		return false
+	case j.sess != r.sess:
+		return true
+	}
+	return j.kind == jobReveal && !j.sess.ringing
+}
+
+// schedule cancels a stale job and, once no job is in flight, starts the next
+// one.
+func (r *alarmRinger) schedule() {
+	if j := r.job; j != nil {
+		if r.stale(j) {
+			j.cancel()
+		}
 		return
 	}
-	prev, quiet := r.quiet, make(chan struct{})
-	r.quiet = quiet
-	go func() {
-		defer close(quiet)
-		if prev != nil {
-			<-prev
+	next := r.nextJob()
+	if next == jobNone {
+		return
+	}
+
+	s := r.sess
+	ctx, cancel := context.WithCancel(context.Background())
+	if next == jobSilence {
+		ctx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
+	}
+	r.job = &job{kind: next, sess: s, cancel: cancel}
+	switch next {
+	case jobSilence:
+		r.dirty = false
+		go func() {
+			defer cancel()
+			r.silence(ctx)
+			r.do(func() { r.job = nil })
+		}()
+
+	case jobStart:
+		a := s.alarm
+		// Either the device dropped off while idle, or it is a stale entry
+		// on Spotify's list that accepts commands without playing. A fresh
+		// librespot fixes both.
+		restart := s.failed && time.Since(r.lastRestart) >= librespotRecheck
+		if restart {
+			r.lastRestart = time.Now()
 		}
-		if s != nil {
-			<-s.done
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		r.silence(ctx)
-	}()
+		go func() {
+			defer cancel()
+			if restart {
+				log.Printf("spotify alarm: restarting librespot and trying again")
+				r.lib.Restart()
+			}
+			id, ok := "", false
+			if !s.failed || sleepCtx(ctx, retryInterval) {
+				id, ok = r.startSilently(ctx, a)
+			}
+			stopped := ctx.Err() != nil
+			r.do(func() {
+				r.job = nil
+				switch {
+				case ok:
+					s.ready, s.id, s.failed, s.audible = true, id, false, false
+				case !stopped:
+					s.failed = true
+				}
+			})
+		}()
+
+	case jobReveal:
+		id := s.id
+		go func() {
+			defer cancel()
+			ok := r.reveal(ctx, s, id)
+			stopped := ctx.Err() != nil
+			r.do(func() {
+				r.job = nil
+				if ok || stopped || r.sess != s {
+					return
+				}
+				s.ready = false
+				if s.ringing {
+					log.Printf("spotify alarm: lost the playlist while ringing; the tone rings until it is back")
+					r.audio.Start(s.alarm)
+				}
+			})
+		}()
+
+	case jobLower:
+		id := s.id
+		go func() {
+			defer cancel()
+			if err := r.spot.SetVolume(ctx, id, 0); err != nil {
+				log.Printf("spotify alarm: lowering the volume for the snooze failed: %v", err)
+			}
+			r.do(func() {
+				r.job = nil
+				s.audible = false
+			})
+		}()
+	}
 }
 
 // silence pauses our device and returns its Connect volume to rest (0). Other
@@ -255,115 +388,9 @@ func (r *alarmRinger) silence(ctx context.Context) {
 	}
 }
 
-// run drives one session until it is cancelled: get the playlist playing
-// silently (restarting librespot as often as that takes), then follow ringing
-// — up when the alarm rings, back to 0 when it is snoozed.
-func (r *alarmRinger) run(ctx context.Context, s *session, quiet <-chan struct{}) {
-	defer close(s.done)
-	if quiet != nil {
-		select {
-		case <-quiet:
-		case <-ctx.Done():
-			return
-		}
-	}
-
-	var (
-		id          string
-		audible     bool // our volume is up (or ramping up)
-		lastRestart time.Time
-		silentSince = time.Now()
-	)
-	for ctx.Err() == nil {
-		ringing, ready := r.state(s)
-
-		if ringing {
-			silentSince = time.Now()
-		} else if time.Since(silentSince) >= silentMax {
-			log.Printf("spotify alarm: %s has played silently for %s without ringing; ending it", s.alarm.TimeString(), silentMax)
-			r.mu.Lock()
-			if r.sess == s {
-				r.endSessionLocked()
-			}
-			r.mu.Unlock()
-			return
-		}
-
-		if !ready {
-			var ok bool
-			if id, ok = r.startSilently(ctx, s); !ok {
-				if ctx.Err() != nil {
-					return // stopped mid-attempt: leave librespot alone
-				}
-				// Either the device dropped off while idle, or it is a stale
-				// entry on Spotify's list that accepts commands without
-				// playing. A fresh librespot fixes both.
-				if time.Since(lastRestart) >= librespotRecheck {
-					log.Printf("spotify alarm: restarting librespot and trying again")
-					r.lib.Restart()
-					lastRestart = time.Now()
-				}
-				sleepCtx(ctx, retryInterval)
-				continue
-			}
-			audible = false
-			ringing = r.setReady(s, true)
-		}
-
-		switch {
-		case ringing && !audible:
-			if !r.reveal(ctx, s, id) {
-				if ctx.Err() == nil {
-					r.setReady(s, false) // rings the tone while we recover
-				}
-				continue
-			}
-			audible = true
-		case !ringing && audible:
-			if err := r.spot.SetVolume(ctx, id, 0); err != nil {
-				log.Printf("spotify alarm: lowering the volume for the snooze failed: %v", err)
-			}
-			audible = false
-		}
-
-		var expire <-chan time.Time
-		if !ringing {
-			expire = time.After(silentMax - time.Since(silentSince))
-		}
-		select {
-		case <-ctx.Done():
-		case <-s.wake:
-		case <-expire:
-		}
-		if ringing { // it rang right up to this wake-up
-			silentSince = time.Now()
-		}
-	}
-}
-
-// state reads whether s should be ringing and whether its playlist is ready.
-func (r *alarmRinger) state(s *session) (ringing, ready bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return s.ringing, s.ready
-}
-
-// setReady records whether s's playlist is playing. Losing it while the alarm
-// rings brings the tone back. Returns whether s should be ringing.
-func (r *alarmRinger) setReady(s *session, ready bool) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	s.ready = ready
-	if !ready && s.ringing && r.sess == s {
-		log.Printf("spotify alarm: lost the playlist while ringing; the tone rings until it is back")
-		r.audio.Start(s.alarm)
-	}
-	return s.ringing
-}
-
 // startSilently starts the alarm's playlist on our device at volume 0 and
 // waits for proof that it is really playing. Returns the device id.
-func (r *alarmRinger) startSilently(ctx context.Context, s *session) (string, bool) {
+func (r *alarmRinger) startSilently(ctx context.Context, a alarm.Alarm) (string, bool) {
 	devs, err := r.spot.Devices(ctx)
 	if err != nil {
 		log.Printf("spotify alarm: device lookup failed: %v", err)
@@ -384,14 +411,14 @@ func (r *alarmRinger) startSilently(ctx context.Context, s *session) (string, bo
 	// The device rests at 0, but someone may have left it up after playing
 	// to it from a phone. Playing like that is an alarm going off early, and
 	// an idle device can refuse a volume change — then a librespot restart
-	// (the caller's next step) brings it back at 0.
+	// (before the next attempt) brings it back at 0.
 	if v := dev.VolumePercent; v == nil || *v != 0 {
 		if err := r.spot.SetVolume(ctx, id, 0); err != nil {
 			log.Printf("spotify alarm: %q is idle at a volume above 0 and refuses to go to 0 (%v)", r.device, err)
 			return "", false
 		}
 	}
-	if err := r.spot.Play(ctx, id, s.alarm.Sound.Ref, nil); err != nil {
+	if err := r.spot.Play(ctx, id, a.Sound.Ref, nil); err != nil {
 		log.Printf("spotify alarm: play failed: %v", err)
 		return "", false
 	}
@@ -411,14 +438,14 @@ func (r *alarmRinger) startSilently(ctx context.Context, s *session) (string, bo
 	if err := r.spot.Shuffle(ctx, id, true); err != nil {
 		log.Printf("spotify alarm: shuffle failed: %v", err)
 	}
-	log.Printf("spotify alarm: %s is playing silently on %q", s.alarm.TimeString(), r.device)
+	log.Printf("spotify alarm: %s is playing silently on %q", a.TimeString(), r.device)
 	return id, true
 }
 
 // reveal makes a silently playing session audible: skip to a fresh track of
 // the shuffled playlist, confirm it plays, silence the tone (and the radio),
-// and ramp the volume up. A snooze or stop cuts the ramp short. Returns false
-// if the music did not come back after the skip.
+// and ramp the volume up. A snooze or stop cancels ctx, cutting the ramp
+// short. Returns false if the music did not come back after the skip.
 func (r *alarmRinger) reveal(ctx context.Context, s *session, id string) bool {
 	if err := r.spot.Next(ctx, id); err != nil {
 		log.Printf("spotify alarm: next failed: %v", err)
@@ -430,18 +457,18 @@ func (r *alarmRinger) reveal(ctx context.Context, s *session, id string) bool {
 		return false
 	}
 
-	r.mu.Lock()
-	if s.ringing && r.sess == s {
-		r.audio.Stop()
-	}
-	r.mu.Unlock()
+	r.do(func() {
+		if r.sess == s {
+			s.audible = true // from here on a snooze must lower it again
+			if s.ringing {
+				r.audio.Stop()
+			}
+		}
+	})
 	log.Printf("spotify alarm: ringing with music on %q, ramping up over %s", r.device, rampUp)
 
 	for i := 1; i <= rampSteps; i++ {
 		if !sleepCtx(ctx, rampUp/time.Duration(rampSteps)) {
-			return true
-		}
-		if ringing, _ := r.state(s); !ringing {
 			return true
 		}
 		if err := r.spot.SetVolume(ctx, id, 100*i/rampSteps); err != nil {
@@ -454,7 +481,7 @@ func (r *alarmRinger) reveal(ctx context.Context, s *session, id string) bool {
 // playbackConfirmed reports whether deviceID is genuinely rendering audio. The
 // player must say it is playing on that device AND its track position must
 // advance between two reads: is_playing alone can be true while the device
-// produces nothing at all. Returns false if the session ends or the deadline
+// produces nothing at all. Returns false if ctx is cancelled or the deadline
 // passes first.
 func (r *alarmRinger) playbackConfirmed(ctx context.Context, deviceID string, within time.Duration) bool {
 	deadline := time.Now().Add(within)

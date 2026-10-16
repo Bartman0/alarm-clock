@@ -69,7 +69,7 @@ func run(w *app.Window) error {
 	lib.Start()
 	defer lib.Stop()
 
-	ringer := &alarmRinger{audio: controller, spot: spot, lib: lib, device: deviceName}
+	ringer := newAlarmRinger(controller, spot, lib, deviceName)
 
 	application := ui.NewApp(ui.NewTheme(), store, ringer)
 	application.SetRadio(controller)

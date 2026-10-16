@@ -59,29 +59,6 @@ const (
 	stepThreshold     = 2 * time.Second
 )
 
-// ringOp is a change to the ringer decided while holding a.mu and applied after
-// releasing it. The ringer talks to mpv and the Spotify Web API, and a slow
-// call there must never wedge the scheduler or the UI (Layout takes the same
-// mutex, so a blocked ringer would freeze the display on its last frame).
-type ringOp int
-
-const (
-	opNone ringOp = iota
-	opStart
-	opStop
-	opSnooze
-	opPrepare
-	opCancelPrepare
-)
-
-// ringCmd is a ringOp with what it applies to: the alarm for opStart and
-// opPrepare, and for opPrepare also the occurrence being prepared.
-type ringCmd struct {
-	op ringOp
-	al alarm.Alarm
-	at time.Time
-}
-
 // App owns all screen state and drives navigation, alarm timing and layout.
 // Every screen lives as a method on App (across the ui package's files) and
 // mutates this shared state; the Gio main loop only calls Layout each frame.
@@ -350,62 +327,39 @@ func (a *App) logHeartbeat(now time.Time) {
 	log.Printf("heartbeat: %s %s next[%s]", now.Format("2006-01-02 15:04:05 MST"), state, next)
 }
 
-// evaluate runs one scheduler step, applies the resulting ringer change outside
-// the lock, and refreshes the UI if firing state changed.
+// evaluate runs one scheduler step and refreshes the UI if firing state
+// changed.
 func (a *App) evaluate(now time.Time) {
 	a.mu.Lock()
-	cmd := a.tickLocked(now)
+	changed := a.tickLocked(now)
 	a.mu.Unlock()
-
-	a.applyRingCmd(cmd)
-	switch cmd.op {
-	case opStart, opStop, opSnooze:
-		if a.invalidate != nil {
-			a.invalidate()
-		}
-	}
-}
-
-// applyRingCmd drives the ringer for a state change decided under a.mu. It must
-// be called with the lock released.
-func (a *App) applyRingCmd(cmd ringCmd) {
-	switch cmd.op {
-	case opStart:
-		a.ringer.Start(cmd.al)
-	case opStop:
-		a.ringer.Stop()
-	case opSnooze:
-		a.ringer.Snooze()
-	case opPrepare:
-		if p, ok := a.ringer.(Preparer); ok {
-			p.Prepare(cmd.al, cmd.at)
-		}
-	case opCancelPrepare:
-		if p, ok := a.ringer.(Preparer); ok {
-			p.CancelPrepare()
-		}
+	if changed && a.invalidate != nil {
+		a.invalidate()
 	}
 }
 
 // tickLocked drives alarm firing, snooze wake-up, the ring time limit and the
-// warm-up ahead of an alarm. The caller must hold a.mu; the returned command
-// must be applied after unlocking.
-func (a *App) tickLocked(now time.Time) ringCmd {
+// warm-up ahead of an alarm, and reports whether an alarm started or stopped
+// ringing. The caller must hold a.mu; the ringer never blocks, so it is driven
+// from under the lock.
+func (a *App) tickLocked(now time.Time) bool {
 	a.seedLastFiredLocked(now)
 
 	if a.ringingIdx >= 0 {
 		if now.Sub(a.ringStart) >= maxRingDuration {
 			log.Printf("alarm %d: auto-stopping after %s", a.ringingIdx, maxRingDuration)
-			return ringCmd{op: a.stopRingingLocked()}
+			a.stopRingingLocked()
+			return true
 		}
-		return ringCmd{}
+		return false
 	}
 
 	// Wake from snooze.
 	if !a.snoozeUntil.IsZero() && !now.Before(a.snoozeUntil) {
 		a.snoozeUntil = time.Time{}
 		log.Printf("alarm %d: snooze elapsed, ringing again", a.snoozeIdx)
-		return a.startRingingLocked(a.snoozeIdx, now)
+		a.startRingingLocked(a.snoozeIdx, now)
+		return true
 	}
 
 	// Fire a scheduled alarm. Firing is level-triggered: any tick inside
@@ -432,7 +386,8 @@ func (a *App) tickLocked(now time.Time) ringCmd {
 				i, sched.Format("2006-01-02 15:04"), late.Round(time.Second), fireGrace)
 			if i == a.preparedIdx {
 				a.preparedIdx = -1
-				return ringCmd{op: opCancelPrepare}
+				a.ringer.CancelPrepare()
+				return false
 			}
 			continue
 		}
@@ -443,37 +398,39 @@ func (a *App) tickLocked(now time.Time) ringCmd {
 		if al.Rhythm == alarm.Once {
 			a.disableOnce = i
 		}
-		return a.startRingingLocked(i, now)
+		a.startRingingLocked(i, now)
+		return true
 	}
 
-	if cmd := a.checkPreparedLocked(); cmd.op != opNone {
-		return cmd
+	if !a.checkPreparedLocked() {
+		a.prepareLocked(now)
 	}
-	return a.prepareLocked(now)
+	return false
 }
 
 // checkPreparedLocked abandons a warm-up whose alarm was edited or switched off
 // since, so the ringer does not hold a silent session for an alarm that will
-// not ring as prepared. A still-enabled alarm is prepared afresh on a later
-// tick. The caller must hold a.mu.
-func (a *App) checkPreparedLocked() ringCmd {
+// not ring as prepared, and reports whether it did. A still-enabled alarm is
+// prepared afresh on a later tick. The caller must hold a.mu.
+func (a *App) checkPreparedLocked() bool {
 	i := a.preparedIdx
 	if i < 0 || a.store.Alarms[i] == a.preparedAlarm {
-		return ringCmd{}
+		return false
 	}
 	log.Printf("alarm %d: changed during its warm-up; abandoning it", i)
 	a.preparedIdx = -1
 	a.lastPrepared[i] = time.Time{}
-	return ringCmd{op: opCancelPrepare}
+	a.ringer.CancelPrepare()
+	return true
 }
 
 // prepareLocked asks the ringer, once per occurrence, to get an alarm that is
 // prepareLead away going. The ringer holds one alarm at a time, so nothing is
 // prepared while another warm-up or a snooze holds it; the caller must hold
 // a.mu.
-func (a *App) prepareLocked(now time.Time) ringCmd {
+func (a *App) prepareLocked(now time.Time) {
 	if a.preparedIdx >= 0 || !a.snoozeUntil.IsZero() {
-		return ringCmd{}
+		return
 	}
 	for i := range a.store.Alarms {
 		al := a.store.Alarms[i]
@@ -493,9 +450,9 @@ func (a *App) prepareLocked(now time.Time) ringCmd {
 		a.lastPrepared[i] = sched
 		a.preparedIdx, a.preparedAlarm = i, al
 		log.Printf("alarm %d: warming up for %s", i, sched.Format("2006-01-02 15:04"))
-		return ringCmd{op: opPrepare, al: al, at: sched}
+		a.ringer.Prepare(al, sched)
+		return
 	}
-	return ringCmd{}
 }
 
 // occurrence is the alarm's scheduled moment on now's calendar day.
@@ -519,54 +476,46 @@ func (a *App) seedLastFiredLocked(now time.Time) {
 	}
 }
 
-// startRingingLocked, stopRingingLocked and snoozeLocked mutate firing state
-// only. The caller must hold a.mu and apply the returned operation after
-// unlocking — see applyRingCmd.
-func (a *App) startRingingLocked(i int, now time.Time) ringCmd {
+// startRingingLocked and stopRingingLocked change firing state and drive the
+// ringer to match. The caller must hold a.mu.
+func (a *App) startRingingLocked(i int, now time.Time) {
 	a.ringingIdx = i
 	a.ringStart = now
 	a.preparedIdx = -1 // Start takes over whatever the ringer was warming up
-	return ringCmd{op: opStart, al: a.store.Alarms[i]}
+	a.ringer.Start(a.store.Alarms[i])
 }
 
-func (a *App) stopRingingLocked() ringOp {
-	op := opNone
-	if a.ringingIdx >= 0 {
-		op = opStop
-	}
+// stopRingingLocked reports whether an alarm was ringing.
+func (a *App) stopRingingLocked() bool {
+	was := a.ringingIdx >= 0
 	a.ringingIdx = -1
 	a.snoozeUntil = time.Time{}
-	return op
+	if was {
+		a.ringer.Stop()
+	}
+	return was
 }
 
-func (a *App) snoozeLocked(now time.Time) ringOp {
+// stopRinging and snooze are the firing screen's buttons.
+func (a *App) stopRinging() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stopRingingLocked() {
+		log.Printf("alarm stopped from the firing screen")
+	}
+}
+
+func (a *App) snooze(now time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.ringingIdx < 0 {
-		return opNone
+		return
 	}
 	log.Printf("alarm %d: snoozing for %s", a.ringingIdx, snoozeDuration)
 	a.snoozeIdx = a.ringingIdx
 	a.snoozeUntil = now.Add(snoozeDuration)
 	a.ringingIdx = -1
-	return opSnooze
-}
-
-// stopRinging and snooze are the UI-facing entry points for the firing screen:
-// they take the lock, change state, release it, and only then touch the ringer.
-func (a *App) stopRinging() {
-	a.mu.Lock()
-	op := a.stopRingingLocked()
-	a.mu.Unlock()
-	if op == opStop {
-		log.Printf("alarm stopped from the firing screen")
-	}
-	a.applyRingCmd(ringCmd{op: op})
-}
-
-func (a *App) snooze(now time.Time) {
-	a.mu.Lock()
-	op := a.snoozeLocked(now)
-	a.mu.Unlock()
-	a.applyRingCmd(ringCmd{op: op})
+	a.ringer.Snooze()
 }
 
 // stopAll silences everything from the home screen: it clears any ringing /

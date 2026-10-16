@@ -153,8 +153,11 @@ func newTestRinger(t *testing.T, dev *fakeDevice) (*alarmRinger, *fakeTone, *fak
 		spotify.Tokens{AccessToken: "A", RefreshToken: "R", Expiry: time.Now().Add(time.Hour)}, nil)
 	tone := &fakeTone{}
 	lib := &fakeLibrespot{dev: dev}
-	r := &alarmRinger{audio: tone, spot: spot, lib: lib, device: "Wekker"}
-	t.Cleanup(r.Stop)
+	r := newAlarmRinger(tone, spot, lib, "Wekker")
+	t.Cleanup(func() {
+		r.Stop()
+		r.inspect(func() {}) // let the Stop land before the next test
+	})
 	return r, tone, lib
 }
 
@@ -173,11 +176,19 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func (r *alarmRinger) isReady() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.sess != nil && r.sess.ready
+// inspect runs f on the ringer's loop goroutine and waits for it.
+func (r *alarmRinger) inspect(f func()) {
+	done := make(chan struct{})
+	r.do(func() { f(); close(done) })
+	<-done
 }
+
+func (r *alarmRinger) isReady() (ready bool) {
+	r.inspect(func() { ready = r.sess != nil && r.sess.ready })
+	return ready
+}
+
+func (t *fakeTone) isOn() bool { on, _ := t.state(); return on }
 
 // The whole point: a warmed-up alarm plays its playlist inaudibly until it is
 // due, then skips to a fresh track and ramps up — without the tone.
@@ -274,13 +285,11 @@ func TestToneCoversAFailedWarmUpUntilMusicPlays(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	r.Start(spotifyAlarm)
-	if on, _ := tone.state(); !on {
-		t.Fatal("the tone must ring while Spotify is not playing")
-	}
+	eventually(t, "the tone rings while Spotify is not playing", tone.isOn)
 	lib.mu.Unlock()
 
 	eventually(t, "the music is up", func() bool { return dev.get().volume == 100 })
-	if on, _ := tone.state(); on {
+	if tone.isOn() {
 		t.Fatal("the tone should stop once music plays")
 	}
 }
@@ -294,9 +303,7 @@ func TestToneAlarmEndsAWarmUp(t *testing.T) {
 	eventually(t, "the warm-up is playing", r.isReady)
 
 	r.Start(alarm.Alarm{Enabled: true, Hour: 7})
-	if on, _ := tone.state(); !on {
-		t.Fatal("tone alarm did not ring")
-	}
+	eventually(t, "the tone alarm rings", tone.isOn)
 	eventually(t, "the warm-up is paused", func() bool { return !dev.get().playing })
 }
 
